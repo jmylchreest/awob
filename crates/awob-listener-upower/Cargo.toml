@@ -1,0 +1,18 @@
+[package]
+name = "awob-listener-upower"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+description = "UPower listener: tracks battery state and renders OSD on level/charging changes."
+
+[[bin]]
+name = "awob-listener-upower"
+path = "src/main.rs"
+
+[dependencies]
+awob-client.workspace = true
+clap = { version = "4", default-features = false, features = ["derive", "std"] }
+zbus = { version = "4", default-features = false, features = ["blocking", "async-io"] }

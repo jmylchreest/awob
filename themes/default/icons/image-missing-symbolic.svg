@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16">
+  <!-- default theme override: a triangular warning glyph so it's
+       obviously distinguishable from awob's built-in fallback when
+       resolving theme-supplied missing icons works correctly. -->
+  <path fill="currentColor" fill-rule="evenodd"
+    d="M8 1.2 1 14h14L8 1.2zm0 2L13.3 13H2.7L8 3.2zM7.3 6v4h1.4V6H7.3zm0 5v1.5h1.4V11H7.3z"/>
+</svg>

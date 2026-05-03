@@ -1,0 +1,18 @@
+[package]
+name = "awob-listener-keyboard-backlight"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+description = "Keyboard-backlight listener: watches /sys/class/leds and renders OSD on changes."
+
+[[bin]]
+name = "awob-listener-keyboard-backlight"
+path = "src/main.rs"
+
+[dependencies]
+awob-client.workspace = true
+clap = { version = "4", default-features = false, features = ["derive", "std"] }
+notify = "6"

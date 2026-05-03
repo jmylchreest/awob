@@ -1,0 +1,19 @@
+[package]
+name = "awob-listener-pipewire"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+description = "PipeWire listener: tracks default sink/source and renders OSD on volume/mute changes."
+
+[[bin]]
+name = "awob-listener-pipewire"
+path = "src/main.rs"
+
+[dependencies]
+awob-client.workspace = true
+clap = { version = "4", default-features = false, features = ["derive", "std"] }
+pipewire = "0.9"
+libspa = "0.9"

@@ -1,0 +1,14 @@
+/target
+**/*.rs.bk
+*.swp
+.DS_Store
+/.cargo/config.toml.local
+
+# Project-local agent tooling state (sockets, caches, etc.).
+/.aide
+/.claude
+
+# Docusaurus build output.
+/docs/build
+/docs/.docusaurus
+/docs/node_modules

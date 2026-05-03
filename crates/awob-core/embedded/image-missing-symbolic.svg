@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16">
+  <!-- awob built-in fallback: rendered when no theme-supplied or system
+       icon could be resolved for the requested name. Symbolic so the
+       icon resolver tints it to $fg automatically. -->
+  <path fill="currentColor" fill-rule="evenodd"
+    d="M2 2h12v12H2V2zm1 1v10h10V3H3zm3.5 2a1.5 1.5 0 0 1 1.5-1.5 1.5 1.5 0 0 1 1.5 1.5c0 .8-.4 1.2-1 1.6-.4.3-.5.4-.5.9v.25h-1V8.5c0-.8.5-1.2 1-1.55.4-.3.5-.5.5-.95A.5.5 0 0 0 8 5.5a.5.5 0 0 0-.5.5h-1zM7.5 11h1v1h-1v-1z"/>
+</svg>

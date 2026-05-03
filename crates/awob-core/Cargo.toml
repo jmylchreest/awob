@@ -1,0 +1,23 @@
+[package]
+name = "awob-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+description = "Scene engine and software renderer for awob."
+
+[dependencies]
+awob-protocol.workspace = true
+kdl = "6"
+thiserror = "2"
+tiny-skia = "0.11"
+cosmic-text = "0.12"
+resvg = "0.44"
+usvg = "0.44"
+png = "0.17"
+freedesktop-icons = "0.4"
+
+[dev-dependencies]
+tempfile = "3"

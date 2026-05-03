@@ -1,0 +1,50 @@
+// awob console theme.
+//
+// Hacker / terminal aesthetic: monospace label only (no icon), bar
+// rendered as discrete cell blocks reminiscent of a terminal progress
+// bar, off-white-on-black surface, bright-green ANSI accent. Sharp
+// corners — no rounding anywhere. No drop shadow.
+//
+// `font="monospace …"` resolves to the system's default monospace
+// face via cosmic-text's generic-family handling — DejaVu Sans Mono
+// on most Linux distros.
+
+import "../_palettes/console.kdl"
+
+surface {
+    width 360
+    height 56
+    anchor "bottom"
+    offset 0 -56
+    fade-in    "100ms"
+    show       "1800ms"
+    fade-out   "100ms"
+    transition "260ms"
+}
+
+scene {
+    // Surface background. No radius, no shadow — terminal ribbon.
+    rect z=0 x=0 y=0 width="100%" height="100%" fill="$bg"
+
+    // 1px border in track colour. Drawn as four edges so it doesn't
+    // fight the cell bar.
+    rect z=0 x=0 y=0 width="100%" height=1 fill="$track"
+    rect z=0 x=0 y="100%-1" width="100%" height=1 fill="$track"
+    rect z=0 x=0 y=0 width=1 height="100%" fill="$track"
+    rect z=0 x="100%-1" y=0 width=1 height="100%" fill="$track"
+
+    // Label row: above the bar, left-aligned, uppercase, monospace.
+    // Truncated to ~36 chars — the bar is ~328px wide and DejaVu
+    // Sans Mono at 13pt is ~8px/char, so ~40 chars *just* fit. 36
+    // gives a one-char safety margin. Anything longer renders as
+    // "FIRST 36 CHARS…".
+    text z=1 value="{upper(truncate($app ?? label($event), 36))}" \
+        x=16 y=10 font="monospace 13 600" colour="$fg"
+
+    // The bar — 20 cells, 2px gap, no rounding. Full width minus 16px
+    // padding each side; sits below the label row.
+    bar z=2 x=16 y=32 width="100%-32" height=14 \
+        fill="$accent" \
+        min=0 max="$max" value="$value" from="$value" \
+        cells=20 gap=2
+}

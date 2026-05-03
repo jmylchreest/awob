@@ -1,0 +1,28 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/jmylchreest/awob"
+authors = ["John Mylchreest <jmylchreest@gmail.com>"]
+rust-version = "1.85"
+
+[workspace.dependencies]
+# Internal
+awob-protocol = { path = "crates/awob-protocol" }
+awob-client = { path = "crates/awob-client" }
+awob-core = { path = "crates/awob-core" }
+
+[profile.release]
+# Size-optimised. The daemon renders 60fps OSDs which is well within
+# tiny-skia's perf even at opt-level=z, so we trade speed for binary size
+# uniformly across the workspace. lto=fat + codegen-units=1 unlocks
+# cross-crate inlining and dead-code elimination, biggest single win.
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+strip = "symbols"
+panic = "abort"

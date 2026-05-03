@@ -1,0 +1,53 @@
+// awob "wob" theme.
+//
+// Pixel-faithful clone of upstream wob's default look: black background,
+// white border, white-on-black bar fill. Geometry mirrors wob's defaults
+// (width 400, height 50, border_size 4, border_offset 4, bar_padding 4).
+// Override the colours via the palette block here or by importing your own.
+
+palette {
+    bg     "#000000"
+    border "#ffffff"
+    bar    "#ffffff"
+}
+
+styles {
+    // wob style names so existing scripts that send `<value> <style>`
+    // keep working untouched.
+    style "low"      bar_color="$bar"
+    style "normal"   bar_color="$bar"
+    style "critical" bar_color="$bar"
+    style "muted"    bar_color="$bar"
+}
+
+// Geometry matches upstream wob's defaults (config.c):
+//   width=400, height=50, border_size=4, border_offset=4, bar_padding=4
+//   timeout=1000ms, anchor=<unset> (center of the output), margin=0
+//   background_color=#FF000000, bar_color=#FFFFFFFF, border_color=#FFFFFFFF
+surface {
+    width 400
+    height 50
+    anchor "center"
+    fade-in  "0ms"
+    show     "1000ms"
+    fade-out "0ms"
+}
+
+scene {
+    // Background plate.
+    rect z=0 x=0 y=0 width="100%" height="100%" fill="$bg"
+
+    // White border. Drawn as a fill 4px inside the surface; the next
+    // rect (inner background) covers everything except the visible frame.
+    rect z=1 x=4 y=4 width="100%-8" height="100%-8" fill="$border"
+
+    // Inner black area (between the border and the bar padding).
+    rect z=2 x=8 y=8 width="100%-16" height="100%-16" fill="$bg"
+
+    // The bar fill: inset by border_offset (4) + border (4) + bar_padding (4)
+    // = 12 px on each side, value-driven width.
+    bar z=3 x=12 y=12 width="100%-24" height="100%-24" \
+        fill="$bar" \
+        min=0 max="$max" value="$value" from="{$lastValue ?? $value}" \
+        transition="width 180ms linear"
+}

@@ -1,0 +1,22 @@
+[package]
+name = "awob-listener-backlight"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+description = "Backlight listener: watches sysfs/logind brightness and renders OSD on changes."
+
+[[bin]]
+name = "awob-listener-backlight"
+path = "src/main.rs"
+
+[dependencies]
+awob-client.workspace = true
+clap = { version = "4", default-features = false, features = ["derive", "std"] }
+notify = "6"
+# wayland-client is the only native dep we need to query `wl_output` for the
+# real make/model of the monitor this backlight controls. We don't need
+# SCTK's higher-level abstractions — a one-shot probe at startup is plenty.
+wayland-client = "0.31"

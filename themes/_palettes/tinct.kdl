@@ -1,0 +1,22 @@
+// Shared palette + named-style block. Themes that want the tinct look
+// `import "../_palettes/tinct.kdl"` and inherit these colors and the standard
+// low/normal/warn/critical/muted style mapping for free.
+
+palette {
+    bg     "rgba(28,28,35,0.85)"
+    fg     "#f3e8d7"
+    track  "rgba(255,255,255,0.08)"
+    low    "#8fdc55"
+    normal "#baea96"
+    warn   "#e89a49"
+    crit   "#dc8855"
+    muted  "#6e6e75"
+}
+
+styles {
+    style "low"      accent="$low"
+    style "normal"   accent="$normal"
+    style "warn"     accent="$warn"
+    style "critical" accent="$crit"
+    style "muted"    accent="$crit" alpha="0.6"
+}

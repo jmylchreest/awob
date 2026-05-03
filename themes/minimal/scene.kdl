@@ -1,0 +1,28 @@
+// awob minimal theme.
+//
+// Smallest sensible theme: one rounded rect for the surface, one bar for the
+// value. No icon, no label. Useful as a starting point if you want to
+// hand-author your own and don't need the default's affordances.
+
+import "../_palettes/tinct.kdl"
+
+surface {
+    width 240
+    height 6
+    anchor "bottom"
+    offset 0 -32
+    fade-in  "120ms"
+    show     "900ms"
+    fade-out "240ms"
+}
+
+scene {
+    // Track / unfilled portion.
+    rect z=0 x=0 y=0 width="100%" height="100%" radius=3 fill="$track"
+
+    // Filled portion: full width × value/max.
+    bar z=1 x=0 y=0 width="100%" height="100%" radius=3 \
+        fill="$accent" \
+        min=0 max="$max" value="$value" from="{$lastValue ?? $value}" \
+        transition="width 180ms ease-out"
+}
