@@ -38,6 +38,12 @@ pub struct AwobConfig {
     pub themes_dir: Option<String>,
     #[serde(default)]
     pub socket: Option<String>,
+    /// Late palette overlay applied after the active theme's own
+    /// palette + styles, regardless of whether the theme imports
+    /// anything itself. Forces every loaded theme through the same
+    /// colour transformation. CLI `--force-palette` overrides.
+    #[serde(default)]
+    pub force_palette: Option<String>,
     #[serde(default)]
     pub supervisor: SupervisorConfig,
     #[serde(default)]

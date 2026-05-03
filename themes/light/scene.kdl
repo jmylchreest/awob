@@ -30,8 +30,14 @@ scene {
     image z=1 src="{$icon ?? icon($event)}" \
         x=14 y="center" width=22 height=22
 
-    text z=1 value="{$app ?? label($event)}" \
+    // Label, truncated to 24 chars so it can't collide with the
+    // percentage readout on the right.
+    text z=1 value="{truncate($app ?? label($event), 24)}" \
         x=46 y=14 font="Inter 14 500" colour="$fg"
+
+    // Percentage readout, right-aligned, integer-rounded.
+    text z=1 anchor="top-right" value="{int($progress * 100)}%" \
+        x=14 y=14 font="Inter 14 500" colour="$fg"
 
     rect z=1 x=46 y=42 width="100%-60" height=8 radius=999 fill="$track"
 

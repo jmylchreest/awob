@@ -1,16 +1,35 @@
 // awob default theme.
 //
-// Reference scene illustrating every concept the engine supports. Implementers
-// should treat this as the canonical worked example of the theme model.
+// Reference scene illustrating every concept the engine supports.
+// Self-contained: palette + styles + scene live in this one file. To
+// vary the colour scheme without editing the theme, use
+// `--force-palette <path>` on awob-daemon (or `force_palette` in
+// awob.toml). Themes that want to import a shared palette instead can
+// — see `themes/light/scene.kdl` for an example.
 //
 // Demonstrates:
-//   * `import` of a shared palette (./../_palettes/tinct.kdl) — edit that
-//     file and the daemon hot-reloads while running.
 //   * fade-in / show / fade-out animation phases.
 //   * Style-driven accent override (low / normal / warn / critical / muted).
 //   * Per-element bindings ($value, $max, $lastValue, $event, $app, $icon).
 
-import "../_palettes/tinct.kdl"
+palette {
+    bg     "rgba(28,28,35,0.85)"
+    fg     "#f3e8d7"
+    track  "rgba(255,255,255,0.08)"
+    low    "#8fdc55"
+    normal "#baea96"
+    warn   "#e89a49"
+    crit   "#dc8855"
+    muted  "#6e6e75"
+}
+
+styles {
+    style "low"      accent="$low"
+    style "normal"   accent="$normal"
+    style "warn"     accent="$warn"
+    style "critical" accent="$crit"
+    style "muted"    accent="$crit" alpha="0.6"
+}
 
 surface {
     width 360
@@ -42,8 +61,16 @@ scene {
         x=14 y="center" width=22 height=22
 
     // Label: send-time $app wins; otherwise event-derived label.
-    text z=1 value="{$app ?? label($event)}" \
+    // Truncated to 24 chars so a long $app can't collide with the
+    // percentage readout on the right.
+    text z=1 value="{truncate($app ?? label($event), 24)}" \
         x=46 y=14 font="Inter 14 500" colour="$fg"
+
+    // Percentage readout, right-aligned. Rounded integer; the
+    // anchor=top-right + x=14 puts it 14px from the right edge so it
+    // sits above the bar's right end.
+    text z=1 anchor="top-right" value="{int($progress * 100)}%" \
+        x=14 y=14 font="Inter 14 500" colour="$fg"
 
     // Track behind the bar.
     rect z=1 x=46 y=42 width="100%-60" height=8 radius=999 fill="$track"

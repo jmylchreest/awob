@@ -1,0 +1,29 @@
+// Test/demo palette with deliberately gaudy colours.
+//
+// Drop this in via `--force-palette themes/_palettes/random.kdl` to
+// confirm that the late-import overlay actually wins against any
+// theme's own palette: every stock theme should suddenly render in
+// hot pink + cyan + lemon. If you see the original theme colours
+// instead, the overlay path isn't taking effect.
+//
+// Hot-reloadable: edit any colour below and re-fire an OSD; the
+// daemon's watcher follows the force-palette file like any import.
+
+palette {
+    bg     "rgba(40,8,30,0.92)"
+    fg     "#fffacd"
+    track  "rgba(255,255,255,0.10)"
+    low    "#7fffd4"
+    normal "#ff69b4"
+    warn   "#ffa500"
+    crit   "#ff1493"
+    muted  "#9370db"
+}
+
+styles {
+    style "low"      accent="$low"
+    style "normal"   accent="$normal"
+    style "warn"     accent="$warn"
+    style "critical" accent="$crit"
+    style "muted"    accent="$muted"
+}

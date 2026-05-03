@@ -14,60 +14,14 @@ use std::path::{Path, PathBuf};
 use awob_core::{Theme, ThemeError, parse_theme, parse_theme_with_base};
 
 pub const EMBEDDED_DEFAULT_NAME: &str = "default";
-/// Embedded default theme. Self-contained (no `import` directives) so it
-/// works even when no themes directory is on disk. The on-disk
-/// `themes/default/scene.kdl` uses `import "../_palettes/tinct.kdl"` to
-/// demonstrate the shared-palette pattern.
-pub const EMBEDDED_DEFAULT_KDL: &str = r##"
-palette {
-    bg     "rgba(28,28,35,0.85)"
-    fg     "#f3e8d7"
-    track  "rgba(255,255,255,0.08)"
-    low    "#8fdc55"
-    normal "#baea96"
-    warn   "#e89a49"
-    crit   "#dc8855"
-    muted  "#6e6e75"
-}
 
-styles {
-    style "low"      accent="$low"
-    style "normal"   accent="$normal"
-    style "warn"     accent="$warn"
-    style "critical" accent="$crit"
-    style "muted"    accent="$crit" alpha="0.6"
-}
-
-surface {
-    width 360
-    height 64
-    anchor "bottom"
-    offset 0 -56
-    fade-in    "150ms"
-    show       "2000ms"
-    fade-out   "150ms"
-    transition "300ms"
-}
-
-scene {
-    rect z=0 \
-        x=0 y=0 width="100%" height="100%" \
-        radius=12 fill="$bg" \
-        shadow="0 8 24 rgba(0,0,0,0.4)"
-
-    image z=1 src="{$icon ?? icon($event)}" \
-        x=14 y="center" width=22 height=22
-
-    text z=1 value="{$app ?? label($event)}" \
-        x=46 y=14 font="Inter 14 500" colour="$fg"
-
-    rect z=1 x=46 y=42 width="100%-60" height=8 radius=999 fill="$track"
-
-    bar z=2 x=46 y=42 width="100%-60" height=8 radius=999 \
-        fill="$accent" \
-        min=0 max="$max" value="$value" from="{$lastValue ?? $value}"
-}
-"##;
+/// Source of the on-disk default theme, baked into the binary at
+/// compile time. Single source of truth — `themes/default/scene.kdl`
+/// is what we ship on disk *and* what the embedded fallback parses.
+/// The default scene is intentionally self-contained (palette +
+/// styles inline; no `import` directives) so the embedded loader
+/// doesn't need filesystem context to parse it.
+const EMBEDDED_DEFAULT_SCENE: &str = include_str!("../../../themes/default/scene.kdl");
 
 #[derive(Debug, thiserror::Error)]
 pub enum LoadError {
@@ -159,9 +113,14 @@ pub fn load(
 /// last-resort at daemon cold-start when the configured theme can't be
 /// found or fails to parse — we still want to come up with *something*
 /// rendered, so the user can see the OSD and reach for `awob set-theme`
-/// to recover. Compiled in, so this is effectively infallible.
+/// to recover.
+///
+/// The embedded source is `themes/default/scene.kdl` itself, included
+/// at compile time via `include_str!`. The default scene is
+/// self-contained (no `import` directives) so this is a pure parse —
+/// no filesystem context required.
 pub fn load_embedded() -> Result<LoadedTheme, LoadError> {
-    let theme = parse_theme(EMBEDDED_DEFAULT_KDL)?;
+    let theme = parse_theme(EMBEDDED_DEFAULT_SCENE)?;
     Ok(LoadedTheme {
         name: EMBEDDED_DEFAULT_NAME.into(),
         theme,

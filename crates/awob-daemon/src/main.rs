@@ -423,10 +423,18 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         })
         .or_else(default_themes_dir);
 
-    // Force-palette overlay (CLI flag). When set, the loader applies it
-    // last so it wins per the existing palette merge rule, and adds it
-    // to the watch list so saving the file hot-reloads.
-    let force_palette: Option<PathBuf> = cli.force_palette.clone();
+    // Force-palette overlay. CLI flag wins; otherwise read from
+    // `awob.toml`'s `force_palette` key with `$VAR` / `~/` expansion
+    // so users can write `force_palette = "~/.config/awob/overlay.kdl"`
+    // and have it Just Work. When set, the loader applies it last so
+    // it wins per the existing palette merge rule, and adds it to
+    // the watch list so saving the file hot-reloads.
+    let force_palette: Option<PathBuf> = cli.force_palette.clone().or_else(|| {
+        file_config
+            .force_palette
+            .as_deref()
+            .map(awob_core::paths::expand_config_path)
+    });
 
     // Cold-start fallback: if the configured theme can't be loaded (missing
     // directory, parse error, etc.), warn loudly but come up with the
