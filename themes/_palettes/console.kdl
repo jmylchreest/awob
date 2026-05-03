@@ -15,6 +15,12 @@ palette {
     warn   "#ffd75f"
     crit   "#ff5f5f"
     muted  "#878787"
+
+    // Overflow state (value > max). Auto-applied as `style="overflow"`
+    // by the daemon. ANSI-red bar on the same black surface — same
+    // contrast pattern as a terminal flagging an error.
+    overflow_bg     "#000000"
+    overflow_accent "#ff5f5f"
 }
 
 styles {
@@ -23,4 +29,5 @@ styles {
     style "warn"     accent="$warn"
     style "critical" accent="$crit"
     style "muted"    accent="$muted"
+    style "overflow" bg="$overflow_bg" accent="$overflow_accent"
 }

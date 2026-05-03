@@ -11,6 +11,12 @@ palette {
     warn   "#e89a49"
     crit   "#dc8855"
     muted  "#6e6e75"
+
+    // Overflow state (value > max). Auto-applied as `style="overflow"`
+    // by the daemon. Defaults to the critical accent so it reads as
+    // "past the limit" without needing a separate config knob.
+    overflow_bg     "rgba(28,28,35,0.85)"
+    overflow_accent "#dc8855"
 }
 
 styles {
@@ -19,4 +25,5 @@ styles {
     style "warn"     accent="$warn"
     style "critical" accent="$crit"
     style "muted"    accent="$crit" alpha="0.6"
+    style "overflow" bg="$overflow_bg" accent="$overflow_accent"
 }

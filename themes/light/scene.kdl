@@ -41,8 +41,13 @@ scene {
 
     rect z=1 x=46 y=42 width="100%-60" height=8 radius=999 fill="$track"
 
+    // Wedge transition is +80% lighter (toward white) and fades to
+    // the bar colour. On a paper-cream background with a dark-green
+    // bar, the wedge appears as a bright glint blending with the bg,
+    // then settling into the bar — inverted from the dark theme's
+    // -80% (which fades through black).
     bar z=2 x=46 y=42 width="100%-60" height=8 radius=999 \
         fill="$accent" \
         min=0 max="$max" value="$value" from="{$lastValue ?? $value}" \
-        transition="-80%"
+        transition="80%"
 }
