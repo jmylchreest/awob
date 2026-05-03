@@ -13,6 +13,8 @@ name = "awob-listener-pipewire"
 path = "src/main.rs"
 
 [dependencies]
+tracing.workspace = true
+tracing-subscriber.workspace = true
 awob-client.workspace = true
 clap = { version = "4", default-features = false, features = ["derive", "std"] }
 pipewire = "0.9"

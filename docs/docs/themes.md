@@ -94,8 +94,49 @@ styles {
     style "warn"     accent="$warn"
     style "critical" accent="$crit"
     style "muted"    accent="$crit" alpha="0.6"
+    style "overflow" bg="$overflow_bg" accent="$overflow_accent"
 }
 ```
+
+#### Overflow auto-style
+
+The daemon auto-applies `style="overflow"` whenever an incoming
+`SendPayload` has `value > max` — useful for "volume above 100 %"
+indicators, etc. Sender-supplied styles are ignored in that case;
+the bar always renders in the overflow look on overflow.
+
+The convention is to ship `overflow_*` palette entries alongside
+the regular palette and an `overflow` style that maps them
+through:
+
+```kdl
+palette {
+    bg              "rgba(28,28,35,0.85)"
+    fg              "#f3e8d7"
+    track           "rgba(255,255,255,0.08)"
+    crit            "#dc8855"
+
+    // Overflow defaults: same surface bg, critical-coloured accent
+    // so the visual reads as "past the limit". Override either
+    // independently for a more dramatic overflow look.
+    overflow_bg     "rgba(28,28,35,0.85)"
+    overflow_accent "#dc8855"
+}
+
+styles {
+    style "overflow" bg="$overflow_bg" accent="$overflow_accent"
+}
+```
+
+The wob theme additionally defines `overflow_border` + `overflow_bar`
+to mirror upstream wob's three-knob overflow colours
+(`overflow_background_color` / `overflow_border_color` /
+`overflow_bar_color`); see `themes/wob/scene.kdl` for the full
+example.
+
+Themes that don't define an `overflow` style block silently fall
+back to the base style on overflow — no breakage, just no visual
+indication. Add the block when you want overflow handling.
 
 ### Elements (in `scene { … }`)
 

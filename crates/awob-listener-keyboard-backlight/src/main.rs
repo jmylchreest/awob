@@ -186,11 +186,13 @@ fn send_to_daemon(
 }
 
 fn main() -> ExitCode {
+    awob_client::init_tracing("info");
+    tracing::info!(version = env!("CARGO_PKG_VERSION"), "awob-listener-keyboard-backlight starting");
     let cli = Cli::parse();
     match run(cli) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("awob-listener-keyboard-backlight: {e}");
+            tracing::info!("awob-listener-keyboard-backlight: {e}");
             ExitCode::from(1)
         }
     }

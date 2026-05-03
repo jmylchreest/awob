@@ -5,7 +5,7 @@ members = ["crates/*"]
 [workspace.package]
 version = "0.0.1"
 edition = "2024"
-license = "MIT OR Apache-2.0"
+license = "MIT"
 repository = "https://github.com/jmylchreest/awob"
 authors = ["John Mylchreest <jmylchreest@gmail.com>"]
 rust-version = "1.85"
@@ -15,6 +15,12 @@ rust-version = "1.85"
 awob-protocol = { path = "crates/awob-protocol" }
 awob-client = { path = "crates/awob-client" }
 awob-core = { path = "crates/awob-core" }
+
+# Structured logging. The daemon + every listener pulls these in;
+# default level is INFO so end users see useful events without
+# tweaking RUST_LOG, but per-send detail goes to DEBUG.
+tracing = { version = "0.1", default-features = false, features = ["std", "attributes"] }
+tracing-subscriber = { version = "0.3", default-features = false, features = ["std", "fmt", "env-filter"] }
 
 [profile.release]
 # Size-optimised. The daemon renders 60fps OSDs which is well within

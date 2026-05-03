@@ -3,6 +3,10 @@
 //! Connect to the awob daemon and send events. Used by the `awob` CLI and by
 //! every listener binary. Designed to be FFI-friendly: no lifetimes leak across
 //! the API surface, errors are values, all ownership is explicit.
+//!
+//! Also exposes [`init_tracing`] — a shared `tracing-subscriber` setup so the
+//! daemon and every listener share one log format and the same `RUST_LOG`
+//! semantics.
 
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
@@ -10,6 +14,29 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 pub use awob_protocol::{HistoryEntry, PROTOCOL_VERSION, Request, Response, SendPayload};
+
+/// Set up the workspace-wide tracing subscriber. Idempotent —
+/// subsequent calls are no-ops if a global subscriber is already
+/// installed (matters for tests + when listeners and the daemon
+/// share a process during integration testing).
+///
+/// Default level: `info` for the program itself, suppressing noisy
+/// framework logs (smithay-client-toolkit, wayland-client, etc.) at
+/// warn unless `RUST_LOG` overrides. The user can dial up with
+/// `RUST_LOG=debug` to see per-send detail and per-frame draw
+/// summaries.
+pub fn init_tracing(default_directives: &str) {
+    use tracing_subscriber::{EnvFilter, fmt};
+    let filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new(default_directives));
+    let _ = fmt()
+        .with_env_filter(filter)
+        .with_target(true)
+        .with_ansi(std::io::IsTerminal::is_terminal(&std::io::stderr()))
+        .compact()
+        .with_writer(std::io::stderr)
+        .try_init();
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {

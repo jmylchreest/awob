@@ -163,7 +163,7 @@ fn parse_state_filter(arg: &str) -> HashSet<BatteryState> {
         if let Some(s) = BatteryState::parse_slug(t) {
             out.insert(s);
         } else {
-            eprintln!("awob-listener-battery: unknown state `{t}` in --states");
+            tracing::info!("awob-listener-battery: unknown state `{t}` in --states");
         }
     }
     out
@@ -331,7 +331,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
     for b in &batteries {
-        eprintln!("  battery: {}", b.display());
+        tracing::info!("  battery: {}", b.display());
     }
 
     // Subscribe to power_supply uevents. Captures AC plug, battery
@@ -513,16 +513,18 @@ fn refresh_and_send(
     }
     *last = Some((state, pct_int));
     if let Err(e) = fire(socket, source, pct, state) {
-        eprintln!("awob-listener-battery: send: {e}");
+        tracing::info!("awob-listener-battery: send: {e}");
     }
 }
 
 fn main() -> ExitCode {
+    awob_client::init_tracing("info");
+    tracing::info!(version = env!("CARGO_PKG_VERSION"), "awob-listener-battery starting");
     let cli = Cli::parse();
     match run(cli) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("awob-listener-battery: {e}");
+            tracing::info!("awob-listener-battery: {e}");
             ExitCode::from(1)
         }
     }

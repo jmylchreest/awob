@@ -143,7 +143,7 @@ impl Shared {
                     last_value,
                     last_max,
                 );
-                eprintln!("{summary}");
+                tracing::debug!("{summary}");
                 if let Some(handle) = &self.surface {
                     // The wayland thread takes ownership of theme + bindings
                     // for the lifetime of the cycle so it can re-render every
@@ -521,19 +521,19 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         },
     };
     let server = ipc::Server::bind(socket_path)?;
-    eprintln!("listening on {}", server.path().display());
+    tracing::info!("listening on {}", server.path().display());
 
     let surface = if cli.no_surface {
-        eprintln!("running headless (--no-surface): no Wayland surface will be opened");
+        tracing::info!("running headless (--no-surface): no Wayland surface will be opened");
         None
     } else {
         match wayland::spawn() {
             Ok((handle, _join)) => {
-                eprintln!("wayland surface thread started");
+                tracing::info!("wayland surface thread started");
                 Some(handle)
             }
             Err(e) => {
-                eprintln!("warning: failed to start wayland surface ({e}); running headless");
+                tracing::warn!("failed to start wayland surface ({e}); running headless");
                 None
             }
         }
@@ -545,7 +545,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     let watcher = match watcher::ThemeWatcher::new(reload_tx.clone()) {
         Ok(w) => Some(w),
         Err(e) => {
-            eprintln!("warning: file watcher disabled: {e}");
+            tracing::warn!("file watcher disabled: {e}");
             None
         }
     };
@@ -617,7 +617,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                             s.theme.watch_paths().len()
                         );
                     }
-                    Err(e) => eprintln!("hot reload failed: {e}"),
+                    Err(e) => tracing::info!("hot reload failed: {e}"),
                 }
             }
         });
@@ -632,7 +632,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     let effective = build_effective_listeners(&file_config);
     let mut sup = supervisor::Supervisor::new();
     if !effective.is_empty() {
-        eprintln!("supervisor: spawning {} listener(s)", effective.len());
+        tracing::info!("supervisor: spawning {} listener(s)", effective.len());
         sup.spawn_all(effective, Some(server.path().to_path_buf()).as_ref());
     }
     let sup = Arc::new(Mutex::new(sup));
@@ -659,7 +659,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             signals.add(Signal::SIGTERM);
             let _ = signals.thread_block();
             if let Ok(sig) = signals.wait() {
-                eprintln!("daemon: caught {sig:?}, shutting down");
+                tracing::info!("daemon: caught {sig:?}, shutting down");
                 sup.lock().unwrap().shutdown();
                 std::process::exit(0);
             }
@@ -670,7 +670,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         let stream = match incoming {
             Ok(s) => s,
             Err(e) => {
-                eprintln!("accept: {e}");
+                tracing::info!("accept: {e}");
                 continue;
             }
         };
@@ -685,11 +685,23 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn main() -> ExitCode {
+    // Initialise tracing first so the startup banner is its first
+    // line. Default level: info. Quiet noisy framework logs
+    // (smithay-client-toolkit, wayland-client, calloop) at warn so
+    // info-level output stays focused on awob.
+    awob_client::init_tracing(
+        "info,smithay_client_toolkit=warn,wayland_client=warn,calloop=warn",
+    );
+    tracing::info!(
+        version = env!("CARGO_PKG_VERSION"),
+        protocol = awob_protocol::PROTOCOL_VERSION,
+        "awob-daemon starting"
+    );
     let cli = Cli::parse();
     match run(cli) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("awob-daemon: {e}");
+            tracing::error!(error = %e, "awob-daemon failed to start");
             ExitCode::from(1)
         }
     }

@@ -74,7 +74,7 @@ impl Supervisor {
                     Ok(Some(status)) => Some(status),
                     Ok(None) => None,
                     Err(e) => {
-                        eprintln!("supervisor[{name}]: try_wait: {e}");
+                        tracing::info!("supervisor[{name}]: try_wait: {e}");
                         None
                     }
                 }
@@ -128,7 +128,7 @@ impl Supervisor {
         for (name, state) in self.children.iter_mut() {
             if let Some(p) = state.process.as_mut() {
                 let pid = p.id() as i32;
-                eprintln!("supervisor[{name}]: SIGTERM pid={pid}");
+                tracing::info!("supervisor[{name}]: SIGTERM pid={pid}");
                 let _ = nix::sys::signal::kill(
                     nix::unistd::Pid::from_raw(pid),
                     nix::sys::signal::Signal::SIGTERM,
@@ -153,7 +153,7 @@ impl Supervisor {
         for (name, state) in self.children.iter_mut() {
             if let Some(mut p) = state.process.take() {
                 if matches!(p.try_wait(), Ok(None)) {
-                    eprintln!("supervisor[{name}]: SIGKILL pid={}", p.id());
+                    tracing::info!("supervisor[{name}]: SIGKILL pid={}", p.id());
                     let _ = p.kill();
                     let _ = p.wait();
                 }
@@ -210,12 +210,12 @@ fn spawn_child(state: &mut ChildState, socket_path: Option<&PathBuf>) {
 
     match cmd.spawn() {
         Ok(child) => {
-            eprintln!("supervisor[{}]: spawned pid={}", cfg.name, child.id());
+            tracing::info!("supervisor[{}]: spawned pid={}", cfg.name, child.id());
             state.process = Some(child);
             state.backoff_idx = 0;
         }
         Err(e) => {
-            eprintln!("supervisor[{}]: spawn failed: {e}", cfg.name);
+            tracing::info!("supervisor[{}]: spawn failed: {e}", cfg.name);
             // Schedule a retry with current backoff index instead of
             // resetting — repeat spawn failures shouldn't tight-loop.
             let backoff = BACKOFF_MS[state.backoff_idx.min(BACKOFF_MS.len() - 1)];

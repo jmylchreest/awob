@@ -12,6 +12,8 @@ description = "Rust SDK for talking to the awob daemon."
 awob-protocol.workspace = true
 serde_json = "1"
 thiserror = "2"
+tracing.workspace = true
+tracing-subscriber.workspace = true
 
 [dev-dependencies]
 tempfile = "3"

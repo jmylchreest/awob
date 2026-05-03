@@ -475,11 +475,25 @@ impl State {
         if self.theme.is_none() || self.bindings.is_none() {
             return;
         }
-        let surface = theme.surface.clone();
+        // Take layout fields (size, anchor, margin) from the new theme
+        // but preserve the in-flight cycle's timing — a runtime swap
+        // mustn't shorten an OSD whose show duration the caller
+        // explicitly extended via `--timeout`.
+        let new_surface = theme.surface.clone();
+        let merged = ThemeSurface {
+            width: new_surface.width,
+            height: new_surface.height,
+            anchor: new_surface.anchor,
+            margin: new_surface.margin,
+            fade_in: self.surface_def.fade_in,
+            show: self.surface_def.show,
+            fade_out: self.surface_def.fade_out,
+            transition: self.surface_def.transition,
+        };
         if self.layer.is_some() {
-            self.update_layer(&surface);
+            self.update_layer(&merged);
         }
-        self.surface_def = surface;
+        self.surface_def = merged;
         self.renderer.set_theme_dir(theme_dir);
         if let Some(bindings) = self.bindings.as_mut() {
             bindings.palette = theme.palette.clone();

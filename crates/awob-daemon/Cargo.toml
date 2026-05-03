@@ -13,8 +13,13 @@ name = "awob-daemon"
 path = "src/main.rs"
 
 [dependencies]
+tracing.workspace = true
+tracing-subscriber.workspace = true
 awob-protocol.workspace = true
 awob-core.workspace = true
+# Pulled in for the shared tracing subscriber initialiser; the daemon
+# doesn't actually call any of the IPC client code itself.
+awob-client.workspace = true
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = { version = "0.8", default-features = false, features = ["parse"] }

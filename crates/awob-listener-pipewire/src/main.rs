@@ -320,7 +320,7 @@ fn spawn_io_worker(
                     &ev.app,
                     ev.icon_override.as_deref(),
                 ) {
-                    eprintln!("awob-listener-pipewire: send failed: {e}");
+                    tracing::info!("awob-listener-pipewire: send failed: {e}");
                 }
             }
         })
@@ -477,7 +477,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             let node: pw::node::Node = match registry.bind(obj) {
                 Ok(n) => n,
                 Err(e) => {
-                    eprintln!("bind node {}: {e}", obj.id);
+                    tracing::info!("bind node {}: {e}", obj.id);
                     return;
                 }
             };
@@ -526,11 +526,13 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn main() -> ExitCode {
+    awob_client::init_tracing("info");
+    tracing::info!(version = env!("CARGO_PKG_VERSION"), "awob-listener-pipewire starting");
     let cli = Cli::parse();
     match run(cli) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("awob-listener-pipewire: {e}");
+            tracing::info!("awob-listener-pipewire: {e}");
             ExitCode::from(1)
         }
     }

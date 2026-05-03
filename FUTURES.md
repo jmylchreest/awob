@@ -5,6 +5,32 @@ describes the ask, what would need to change, and an estimate of effort so
 you can prioritise.
 
 
+## Structured logging via `tracing`
+
+Today every binary uses `eprintln!` for diagnostics: daemon
+startup, send summaries, listener device-discovery, supervisor
+spawn/exit notices, errors. Listener stdout/stderr is inherited
+into the daemon process via `Stdio::inherit()`, so all output
+flows to the daemon's stderr — wherever that's been redirected
+(`/tmp/awob.log` for manual launches, `journalctl --user -u awob`
+when run via the systemd unit).
+
+Functional, but no log levels and no structured fields. Switching
+to `tracing` + `tracing-subscriber` would give:
+
+* `RUST_LOG=info`/`debug`/`warn` filtering at runtime
+* Per-listener `target=<name>` so journalctl filters cleanly:
+  `journalctl --user -u awob _COMM=awob-daemon SYSLOG_IDENTIFIER=battery`
+* Optional JSON output for ingestion by log shippers
+* Spans for "this whole Send took N ms" diagnostics
+
+Cost: ~30 LOC across awob-daemon + each listener (one
+`tracing-subscriber::fmt::init()` line in `main`, replace
+`eprintln!` with `tracing::info!`/`warn!`). Deferred because the
+current free-form output is debuggable via `journalctl` and
+nothing has actively bitten yet.
+
+
 ## Friendly keyboard names from udev
 
 External USB keyboards often expose vendor + product strings up their
@@ -96,6 +122,25 @@ Path to clippy-clean: address each lint with the smallest viable fix
 a small refactor), then flip CI back to `-D warnings` and add a
 clippy-clean pre-release-hook in `release.toml`. ~30 min of focused
 work; deferred so it doesn't churn the codebase mid-feature.
+
+
+## FFI: expose theme management + query
+
+The `awob-client-ffi` crate currently exports a *send-only* surface:
+`awob_connect` / `awob_connect_to`, the `awob_send_*` builder, the
+`awob_send_dispatch` call, plus `awob_hello`, version readers, and
+error reporting. Six SDK methods aren't FFI-exposed yet:
+
+* `query(source)` → list history entries
+* `set_theme(name)` / `set_theme_with(name, persist)`
+* `theme_list()`
+* `set_force_palette(path)` / `clear`
+* `reload()`
+* `version()`
+
+To match the CLI's reach, an FFI client needs all six. Each is a
+~15 LOC C wrapper plus a cbindgen declaration. Defer until a real
+FFI consumer asks (current consumers are all Rust).
 
 
 ## FFI consumers beyond C

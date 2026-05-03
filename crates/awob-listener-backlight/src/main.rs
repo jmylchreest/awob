@@ -233,11 +233,13 @@ fn sanitise_device(name: &str) -> String {
 }
 
 fn main() -> ExitCode {
+    awob_client::init_tracing("info");
+    tracing::info!(version = env!("CARGO_PKG_VERSION"), "awob-listener-backlight starting");
     let cli = Cli::parse();
     match run(cli) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("awob-listener-backlight: {e}");
+            tracing::info!("awob-listener-backlight: {e}");
             ExitCode::from(1)
         }
     }

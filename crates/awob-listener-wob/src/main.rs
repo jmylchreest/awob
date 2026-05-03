@@ -86,18 +86,18 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         .or_else(default_fifo_path)
         .ok_or("XDG_RUNTIME_DIR not set; pass --fifo")?;
     ensure_fifo(&fifo)?;
-    eprintln!("awob-listener-wob: fifo={}", fifo.display());
+    tracing::info!("awob-listener-wob: fifo={}", fifo.display());
 
     let source = cli
         .source
         .unwrap_or_else(|| format!("wob-fifo-{}", std::process::id()));
-    eprintln!("awob-listener-wob: source={source}");
+    tracing::info!("awob-listener-wob: source={source}");
 
     loop {
         let f = match std::fs::OpenOptions::new().read(true).open(&fifo) {
             Ok(f) => f,
             Err(e) => {
-                eprintln!("awob-listener-wob: open fifo: {e}");
+                tracing::info!("awob-listener-wob: open fifo: {e}");
                 std::thread::sleep(Duration::from_millis(500));
                 continue;
             }
@@ -109,7 +109,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             let line = match line {
                 Ok(l) => l,
                 Err(e) => {
-                    eprintln!("read: {e}");
+                    tracing::info!("read: {e}");
                     break;
                 }
             };
@@ -118,7 +118,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 continue;
             }
             let Some((value, max, style)) = parse_line(trimmed) else {
-                eprintln!("awob-listener-wob: bad line `{trimmed}`");
+                tracing::info!("awob-listener-wob: bad line `{trimmed}`");
                 continue;
             };
             let mut s = Send::new(&cli.event, value)
@@ -138,18 +138,18 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 Some(p) => match Client::connect_to(&p) {
                     Ok(mut c) => {
                         if let Err(e) = c.send(s.build()) {
-                            eprintln!("send: {e}");
+                            tracing::info!("send: {e}");
                         }
                     }
-                    Err(e) => eprintln!("connect: {e}"),
+                    Err(e) => tracing::info!("connect: {e}"),
                 },
                 None => match Client::connect() {
                     Ok(mut c) => {
                         if let Err(e) = c.send(s.build()) {
-                            eprintln!("send: {e}");
+                            tracing::info!("send: {e}");
                         }
                     }
-                    Err(e) => eprintln!("connect: {e}"),
+                    Err(e) => tracing::info!("connect: {e}"),
                 },
             }
         }
@@ -157,11 +157,13 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn main() -> ExitCode {
+    awob_client::init_tracing("info");
+    tracing::info!(version = env!("CARGO_PKG_VERSION"), "awob-listener-wob starting");
     let cli = Cli::parse();
     match run(cli) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("awob-listener-wob: {e}");
+            tracing::info!("awob-listener-wob: {e}");
             ExitCode::from(1)
         }
     }
