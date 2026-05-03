@@ -63,10 +63,20 @@ struct Cli {
     #[arg(long)]
     source: Option<String>,
 
-    /// Comma-separated list of states to react to. Default `all`.
-    /// Recognised: `charging`, `discharging`, `empty`, `fully-charged`,
+    /// Comma-separated list of states to fire OSDs on. Recognised:
+    /// `charging`, `discharging`, `empty`, `fully-charged`,
     /// `pending-charge`, `pending-discharge`, `unknown`, or `all`.
-    #[arg(long, default_value = "all")]
+    ///
+    /// Default `charging,discharging,empty,fully-charged` — the
+    /// "interesting" transitions. `pending-discharge` (AC plugged
+    /// but battery not absorbing — e.g. full at 100%, or the
+    /// kernel's charge-threshold gate is in effect) is captured by
+    /// the cache but doesn't fire by default. Pass `--states all`
+    /// to surface every state change.
+    #[arg(
+        long,
+        default_value = "charging,discharging,empty,fully-charged"
+    )]
     states: String,
 }
 

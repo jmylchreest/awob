@@ -3,21 +3,53 @@
 // Pixel-faithful clone of upstream wob's default look: black background,
 // white border, white-on-black bar fill. Geometry mirrors wob's defaults
 // (width 400, height 50, border_size 4, border_offset 4, bar_padding 4).
-// Override the colours via the palette block here or by importing your own.
+//
+// Colour-theming model matches wob exactly. wob's CLI / config exposes
+// three independent colour knobs (background, border, bar) plus a
+// parallel set for the overflow state, plus per-style overrides of all
+// three. The palette + styles below mirror that model so existing
+// wob users feel at home and named-style scripts work unchanged.
 
 palette {
+    // Wob's three base colours (background_color, border_color,
+    // bar_color in upstream's config.c).
     bg     "#000000"
     border "#ffffff"
     bar    "#ffffff"
+
+    // Wob's overflow colours (when value > max). Upstream defaults
+    // are #FF000000 background + red border + red bar. Awob doesn't
+    // auto-detect the overflow case yet — see the "overflow" style
+    // below for manual application; FUTURES.md tracks auto-apply.
+    overflow_bg     "#000000"
+    overflow_border "#ff0000"
+    overflow_bar    "#ff0000"
 }
 
 styles {
-    // wob style names so existing scripts that send `<value> <style>`
-    // keep working untouched.
-    style "low"      bar_color="$bar"
-    style "normal"   bar_color="$bar"
-    style "critical" bar_color="$bar"
-    style "muted"    bar_color="$bar"
+    // Wob's per-style colour overrides. Each named style on stdin
+    // (`<value> <style>` lines) selects a colour set; in the upstream
+    // wob config users write
+    //
+    //     [style.critical]
+    //     background_color = ...
+    //     border_color     = ...
+    //     bar_color        = ...
+    //
+    // and the matching block in awob is the equivalent. For pixel-
+    // faithful wob, every named style uses the base colours — wob
+    // ships no colour-coded styles out of the box. Customise below:
+    // e.g. `style "critical" bar="#ff0000" border="#ff0000"`.
+    style "low"      bg="$bg" border="$border" bar="$bar"
+    style "normal"   bg="$bg" border="$border" bar="$bar"
+    style "warn"     bg="$bg" border="$border" bar="$bar"
+    style "critical" bg="$bg" border="$border" bar="$bar"
+    style "muted"    bg="$bg" border="$border" bar="$bar"
+
+    // Wob's overflow state, manually applicable as
+    // `awob send --style overflow <value> <max>` until awob grows
+    // automatic detection of `value > max`.
+    style "overflow" bg="$overflow_bg" border="$overflow_border" bar="$overflow_bar"
 }
 
 // Geometry matches upstream wob's defaults (config.c):
