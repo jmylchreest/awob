@@ -109,26 +109,50 @@ impl LoadedTheme {
     }
 }
 
-pub fn load(themes_root: Option<&Path>, name: &str) -> Result<LoadedTheme, LoadError> {
-    if let Some(root) = themes_root {
+/// Load a theme by name, optionally applying a *force-palette overlay*
+/// after the theme's own palette + styles parsing.
+///
+/// The overlay file may declare a `palette { … }` and / or `styles
+/// { … }` block; those entries are merged into the loaded theme
+/// using the existing "later wins, key by key" rule. The overlay's
+/// path is added to `imported_files` so the daemon's hot-reload
+/// watcher tracks it alongside any imports the theme declared itself.
+///
+/// Surface and scene blocks in the overlay are ignored — the force-
+/// palette feature is colour-only by design.
+pub fn load(
+    themes_root: Option<&Path>,
+    name: &str,
+    force_palette: Option<&Path>,
+) -> Result<LoadedTheme, LoadError> {
+    let mut loaded = if let Some(root) = themes_root {
         let dir = root.join(name);
         let scene = dir.join("scene.kdl");
         if scene.exists() {
             let kdl = std::fs::read_to_string(&scene)?;
             let theme = parse_theme_with_base(&kdl, Some(&dir))?;
             let scene_abs = std::fs::canonicalize(&scene).unwrap_or(scene);
-            return Ok(LoadedTheme {
+            LoadedTheme {
                 name: name.into(),
                 theme,
                 source_dir: Some(dir),
                 scene_path: Some(scene_abs),
-            });
+            }
+        } else if name == EMBEDDED_DEFAULT_NAME {
+            load_embedded()?
+        } else {
+            return Err(LoadError::NotFound(name.to_string()));
         }
+    } else if name == EMBEDDED_DEFAULT_NAME {
+        load_embedded()?
+    } else {
+        return Err(LoadError::NotFound(name.to_string()));
+    };
+
+    if let Some(overlay_path) = force_palette {
+        apply_force_palette(&mut loaded.theme, overlay_path)?;
     }
-    if name == EMBEDDED_DEFAULT_NAME {
-        return load_embedded();
-    }
-    Err(LoadError::NotFound(name.to_string()))
+    Ok(loaded)
 }
 
 /// Load the embedded fallback theme without consulting disk. Used as a
@@ -146,13 +170,51 @@ pub fn load_embedded() -> Result<LoadedTheme, LoadError> {
     })
 }
 
+/// Read `overlay_path`, parse it as a partial theme (palette / styles
+/// only — anything else in the file is loaded but ignored), merge the
+/// palette and styles into `theme` last-wins-by-key, and append the
+/// canonical path to `imported_files` so the watcher picks it up.
+///
+/// Style merge: if the overlay declares a style with a name that the
+/// underlying theme already had, the overlay's version replaces it
+/// outright. Names that didn't exist before are appended.
+fn apply_force_palette(theme: &mut Theme, overlay_path: &Path) -> Result<(), LoadError> {
+    let content = std::fs::read_to_string(overlay_path)?;
+    // Use parse_theme_with_base so the overlay can itself `import`
+    // further palettes if a user wants to compose. Base dir is the
+    // overlay's own parent so relative imports resolve sensibly.
+    let base = overlay_path.parent();
+    let overlay = parse_theme_with_base(&content, base)?;
+    theme.palette.extend(overlay.palette);
+    for s in overlay.styles {
+        if let Some(pos) = theme.styles.iter().position(|x| x.name == s.name) {
+            theme.styles[pos] = s;
+        } else {
+            theme.styles.push(s);
+        }
+    }
+    let abs = std::fs::canonicalize(overlay_path).unwrap_or_else(|_| overlay_path.to_path_buf());
+    if !theme.imported_files.iter().any(|p| p == &abs) {
+        theme.imported_files.push(abs);
+    }
+    // Imports that the overlay itself triggered are already in
+    // overlay.imported_files via parse_theme_with_base — copy them too
+    // so the watcher tracks the full chain.
+    for imp in overlay.imported_files {
+        if !theme.imported_files.iter().any(|p| p == &imp) {
+            theme.imported_files.push(imp);
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn loads_embedded_default() {
-        let t = load(None, EMBEDDED_DEFAULT_NAME).unwrap();
+        let t = load(None, EMBEDDED_DEFAULT_NAME, None).unwrap();
         assert_eq!(t.name, "default");
         assert!(t.scene_path.is_none());
         assert_eq!(t.theme.surface.width, 360);
@@ -160,7 +222,7 @@ mod tests {
 
     #[test]
     fn unknown_theme_is_not_found() {
-        let err = load(None, "no-such-theme").unwrap_err();
+        let err = load(None, "no-such-theme", None).unwrap_err();
         assert!(matches!(err, LoadError::NotFound(_)));
     }
 }

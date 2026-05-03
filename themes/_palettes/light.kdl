@@ -1,0 +1,26 @@
+// Light palette. Off-white paper background, near-black text, deep
+// muted accents. Designed to read well on bright displays where the
+// default's translucent dark surface would wash out.
+//
+// Themes that want the light look `import "../_palettes/light.kdl"`
+// to inherit these colours and the standard low/normal/warn/critical
+// /muted style mapping. The `themes/light/` stock theme uses this.
+
+palette {
+    bg     "rgba(246,241,232,0.92)"
+    fg     "#1a1a1a"
+    track  "rgba(0,0,0,0.08)"
+    low    "#3d683a"
+    normal "#2a5e26"
+    warn   "#a86b2a"
+    crit   "#a13d2c"
+    muted  "#8a8a8a"
+}
+
+styles {
+    style "low"      accent="$low"
+    style "normal"   accent="$normal"
+    style "warn"     accent="$warn"
+    style "critical" accent="$crit"
+    style "muted"    accent="$muted"
+}

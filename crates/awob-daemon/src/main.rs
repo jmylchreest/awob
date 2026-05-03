@@ -43,6 +43,15 @@ struct Cli {
     /// tests and debugging the IPC + scene engine without a compositor.
     #[arg(long)]
     no_surface: bool,
+
+    /// Late-import a palette overlay applied AFTER the theme's own
+    /// imports + inline `palette { … }`. Lets you change the colours
+    /// of any theme without editing it. The file is added to the
+    /// hot-reload watch list, so saving the overlay refreshes
+    /// instantly. Accepts the same KDL syntax as
+    /// `themes/_palettes/<name>.kdl`.
+    #[arg(long)]
+    force_palette: Option<PathBuf>,
 }
 
 struct Shared {
@@ -56,6 +65,9 @@ struct Shared {
     /// Used as the rewrite target when a client passes `persist=true` to
     /// `SetTheme`. `None` if no config path could be determined.
     config_path: Option<PathBuf>,
+    /// Late palette overlay applied after every theme load (initial,
+    /// `SetTheme`, `Reload`, hot-reload). See `Cli::force_palette`.
+    force_palette: Option<PathBuf>,
 }
 
 impl Shared {
@@ -164,7 +176,11 @@ impl Shared {
                 Response::Query { entries }
             }
             Request::SetTheme { name, persist } => {
-                match theme_loader::load(self.themes_root.as_deref(), &name) {
+                match theme_loader::load(
+                    self.themes_root.as_deref(),
+                    &name,
+                    self.force_palette.as_deref(),
+                ) {
                     Ok(t) => {
                         self.theme = t;
                         self.rewatch();
@@ -197,7 +213,11 @@ impl Shared {
             }
             Request::Reload => {
                 let name = self.theme.name.clone();
-                match theme_loader::load(self.themes_root.as_deref(), &name) {
+                match theme_loader::load(
+                    self.themes_root.as_deref(),
+                    &name,
+                    self.force_palette.as_deref(),
+                ) {
                     Ok(t) => {
                         self.theme = t;
                         self.rewatch();
@@ -403,12 +423,21 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         })
         .or_else(default_themes_dir);
 
+    // Force-palette overlay (CLI flag). When set, the loader applies it
+    // last so it wins per the existing palette merge rule, and adds it
+    // to the watch list so saving the file hot-reloads.
+    let force_palette: Option<PathBuf> = cli.force_palette.clone();
+
     // Cold-start fallback: if the configured theme can't be loaded (missing
     // directory, parse error, etc.), warn loudly but come up with the
     // embedded default so the user still sees an OSD and can recover via
     // `awob set-theme <name>`. Refusing to start would leave them with no
     // OSD and no way to drive the daemon to fix it.
-    let initial = match theme_loader::load(themes_root.as_deref(), &theme_name) {
+    let initial = match theme_loader::load(
+        themes_root.as_deref(),
+        &theme_name,
+        force_palette.as_deref(),
+    ) {
         Ok(t) => t,
         Err(e) => {
             eprintln!(
@@ -478,6 +507,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         surface,
         watcher,
         config_path,
+        force_palette,
     }));
     {
         let mut s = shared.lock().unwrap();
@@ -507,7 +537,12 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 let mut s = shared.lock().unwrap();
                 let name = s.theme.name.clone();
                 let root = s.themes_root.clone();
-                match theme_loader::load(root.as_deref(), &name) {
+                let force_palette = s.force_palette.clone();
+                match theme_loader::load(
+                    root.as_deref(),
+                    &name,
+                    force_palette.as_deref(),
+                ) {
                     Ok(t) => {
                         s.theme = t;
                         s.rewatch();

@@ -1,0 +1,20 @@
+name = "light"
+description = "Light counterpart to default. Off-white paper background, near-black text, deep muted accents."
+author = "awob"
+version = "0.0.1"
+
+[layout]
+template = "scene.kdl"
+
+[icons]
+volume        = "audio-volume-high"
+volume-low    = "audio-volume-low"
+volume-medium = "audio-volume-medium"
+volume-muted  = "audio-volume-muted"
+brightness    = "display-brightness"
+mic           = "microphone-sensitivity-high"
+mic-muted     = "microphone-disabled"
+battery       = "battery"
+battery-low   = "battery-caution"
+battery-empty = "battery-empty"
+caps          = "input-keyboard"
