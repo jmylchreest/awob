@@ -34,7 +34,7 @@ From source (Linux + Wayland required):
 cargo install --path crates/awob-cli       # `awob` CLI
 cargo install --path crates/awob-daemon    # `awob-daemon` long-running process
 cargo install --path crates/awob-listener-pipewire           # optional listeners
-cargo install --path crates/awob-listener-upower
+cargo install --path crates/awob-listener-battery
 cargo install --path crates/awob-listener-backlight
 cargo install --path crates/awob-listener-keyboard-backlight
 cargo install --path crates/awob-listener-wob                # only if migrating from wob

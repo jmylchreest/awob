@@ -3,6 +3,12 @@
 //! Produces `libawob_client.{so,dylib,dll}` and `libawob_client.a` along with
 //! a generated `awob_client.h` header (via `cbindgen`).
 //!
+//! Clippy disables: `not_unsafe_ptr_arg_deref` and `missing_safety_doc` are
+//! by-design for FFI bindings — every entry point takes raw pointers and
+//! is intentionally callable from C without `unsafe` ceremony on the C
+//! side. Each function's contract is documented in `awob_client.h`.
+#![allow(clippy::not_unsafe_ptr_arg_deref, clippy::missing_safety_doc)]
+//!
 //! Memory model:
 //! * All allocations stay on the Rust side. The C caller hands us null-
 //!   terminated `char*` strings; we copy them. Returned strings (last error)

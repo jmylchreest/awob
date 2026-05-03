@@ -55,7 +55,7 @@ the daemon starts. Volume keys → OSD with no extra glue.
 
 Same pattern for:
 
-* `awob-listener-upower` — battery state → OSD on level changes
+* `awob-listener-battery` — battery state → OSD on level changes
 * `awob-listener-backlight` — display brightness via sysfs
 * `awob-listener-keyboard-backlight` — keyboard LED brightness
 * `awob-listener-wob` — read a wob-format FIFO and forward sends

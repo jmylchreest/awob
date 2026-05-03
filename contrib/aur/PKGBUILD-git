@@ -49,7 +49,7 @@ package() {
 
     for bin in awob awob-daemon \
                awob-listener-pipewire \
-               awob-listener-upower \
+               awob-listener-battery \
                awob-listener-backlight \
                awob-listener-keyboard-backlight \
                awob-listener-wob; do

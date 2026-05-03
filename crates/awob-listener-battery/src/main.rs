@@ -27,13 +27,21 @@ use awob_client::{Client, Send};
 use clap::Parser;
 use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
 
-const LISTENER_ID: &str = "awob-listener-upower";
+const LISTENER_ID: &str = "awob-listener-battery";
 const SYSFS_ROOT: &str = "/sys/class/power_supply";
 /// Re-read everything every minute regardless of uevents — a backstop
 /// against any missed events. The kernel does fire uevents reliably for
 /// the changes we care about, but a periodic refresh costs nothing and
 /// keeps the OSD in sync with reality even after a suspend / resume.
 const RESCAN_INTERVAL: Duration = Duration::from_secs(60);
+
+/// Schedule an extra read this far after every uevent. On AC plug the
+/// kernel often fires the `power_supply` uevent for the AC adapter
+/// (`ACAD/online`) BEFORE the battery driver has updated `BAT*/status`
+/// to `"Charging"`. A single read at uevent time can therefore observe
+/// the *old* battery state. The follow-up refresh catches the lagged
+/// transition without making us poll continuously.
+const EVENT_FOLLOWUP: Duration = Duration::from_millis(800);
 
 #[derive(Parser, Debug)]
 #[command(version, about = "awob — battery listener (sysfs + udev)")]
@@ -136,7 +144,7 @@ fn parse_state_filter(arg: &str) -> HashSet<BatteryState> {
         if let Some(s) = BatteryState::parse_slug(t) {
             out.insert(s);
         } else {
-            eprintln!("awob-listener-upower: unknown state `{t}` in --states");
+            eprintln!("awob-listener-battery: unknown state `{t}` in --states");
         }
     }
     out
@@ -291,14 +299,14 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or_else(|| "battery".into());
     let state_filter = parse_state_filter(&cli.states);
     eprintln!(
-        "awob-listener-upower: source={source} states={} (sysfs + udev)",
+        "awob-listener-battery: source={source} states={} (sysfs + udev)",
         cli.states
     );
 
     let batteries = discover_batteries();
     if batteries.is_empty() {
         eprintln!(
-            "awob-listener-upower: no batteries under {SYSFS_ROOT} \
+            "awob-listener-battery: no batteries under {SYSFS_ROOT} \
              (type=Battery); nothing to watch"
         );
         return Ok(());
@@ -316,6 +324,8 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
 
     let mut last: Option<(BatteryState, i32)> = None;
     let mut last_rescan = Instant::now();
+    // When set, do an extra read at this instant — see `EVENT_FOLLOWUP`.
+    let mut followup_at: Option<Instant> = None;
 
     // Initial fire so the OSD has current state at startup.
     refresh_and_send(
@@ -328,13 +338,16 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     );
 
     loop {
-        // Wait for a uevent OR for the rescan timer. PollTimeout is in
-        // milliseconds; saturate to i32::MAX if the next rescan is far.
-        let elapsed = last_rescan.elapsed();
-        let until_rescan = RESCAN_INTERVAL.saturating_sub(elapsed);
-        let timeout_ms: i32 = until_rescan
-            .as_millis()
-            .min(i32::MAX as u128) as i32;
+        // Wait for the soonest of: (a) a uevent on the udev socket,
+        // (b) the cascade follow-up after a recent uevent, (c) the
+        // periodic rescan backstop.
+        let now = Instant::now();
+        let until_followup = followup_at
+            .map(|t| t.saturating_duration_since(now))
+            .unwrap_or(Duration::MAX);
+        let until_rescan = RESCAN_INTERVAL.saturating_sub(now.duration_since(last_rescan));
+        let wait = until_followup.min(until_rescan);
+        let timeout_ms: i32 = wait.as_millis().min(i32::MAX as u128) as i32;
         let mut pfds = [PollFd::new(monitor_fd, PollFlags::POLLIN)];
         let timeout = PollTimeout::try_from(timeout_ms).unwrap_or(PollTimeout::NONE);
         match poll(&mut pfds, timeout) {
@@ -350,8 +363,11 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             got_event = true;
         }
 
-        let due_for_rescan = last_rescan.elapsed() >= RESCAN_INTERVAL;
-        if got_event || due_for_rescan {
+        let now = Instant::now();
+        let followup_due = followup_at.map(|t| now >= t).unwrap_or(false);
+        let due_for_rescan = now.duration_since(last_rescan) >= RESCAN_INTERVAL;
+
+        if got_event || followup_due || due_for_rescan {
             refresh_and_send(
                 &batteries,
                 &cli.socket,
@@ -360,7 +376,15 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 &mut last,
                 false,
             );
-            last_rescan = Instant::now();
+            last_rescan = now;
+            // After any uevent, schedule a follow-up read to catch a
+            // possibly-lagged BAT/status transition. A follow-up that
+            // already fired clears the slot.
+            followup_at = if got_event {
+                Some(now + EVENT_FOLLOWUP)
+            } else {
+                None
+            };
         }
     }
 }
@@ -394,7 +418,7 @@ fn refresh_and_send(
     }
     *last = Some((state, pct_int));
     if let Err(e) = fire(socket, source, pct, state) {
-        eprintln!("awob-listener-upower: send: {e}");
+        eprintln!("awob-listener-battery: send: {e}");
     }
 }
 
@@ -403,7 +427,7 @@ fn main() -> ExitCode {
     match run(cli) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("awob-listener-upower: {e}");
+            eprintln!("awob-listener-battery: {e}");
             ExitCode::from(1)
         }
     }

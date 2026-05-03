@@ -11,7 +11,7 @@
 //!
 //! # Auto-discovery is on by default; this opts out specific listeners.
 //! [supervisor]
-//! disable = ["upower"]
+//! disable = ["battery"]
 //!
 //! # Explicit listeners are merged with auto-discovered ones (explicit
 //! # entries with the same name win). Listeners that need args belong

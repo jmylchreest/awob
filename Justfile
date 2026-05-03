@@ -88,7 +88,7 @@ install:
     cargo install --path crates/awob-cli --locked
     cargo install --path crates/awob-daemon --locked
     cargo install --path crates/awob-listener-pipewire --locked
-    cargo install --path crates/awob-listener-upower --locked
+    cargo install --path crates/awob-listener-battery --locked
     cargo install --path crates/awob-listener-backlight --locked
     cargo install --path crates/awob-listener-keyboard-backlight --locked
     cargo install --path crates/awob-listener-wob --locked
@@ -104,7 +104,7 @@ uninstall:
     -cargo uninstall awob-cli 2>/dev/null
     -cargo uninstall awob-daemon 2>/dev/null
     -cargo uninstall awob-listener-pipewire 2>/dev/null
-    -cargo uninstall awob-listener-upower 2>/dev/null
+    -cargo uninstall awob-listener-battery 2>/dev/null
     -cargo uninstall awob-listener-backlight 2>/dev/null
     -cargo uninstall awob-listener-keyboard-backlight 2>/dev/null
     -cargo uninstall awob-listener-wob 2>/dev/null

@@ -13,7 +13,7 @@ listener see [Protocol](/protocol).
 ```mermaid
 flowchart LR
     PW[awob-listener-pipewire]
-    UP[awob-listener-upower]
+    UP[awob-listener-battery]
     BL[awob-listener-backlight]
     KB[awob-listener-keyboard-backlight]
     WB[awob-listener-wob<br/><small>FIFO compat</small>]
@@ -139,7 +139,7 @@ socket = "$XDG_RUNTIME_DIR/awob.sock"         # IPC socket path
 
 [supervisor]
 auto = true                                   # default; auto-discover known listeners
-disable = ["upower"]                          # opt-out names from KNOWN_LISTENERS
+disable = ["battery"]                          # opt-out names from KNOWN_LISTENERS
 
 [[listeners]]                                 # explicit listeners; merged with auto
 name = "wob-fifo"                             # explicit entries with the same name as
@@ -160,7 +160,7 @@ binary is present. The registry today:
 | Name | Binary |
 |---|---|
 | `pipewire` | `awob-listener-pipewire` |
-| `upower` | `awob-listener-upower` |
+| `battery` | `awob-listener-battery` |
 | `backlight` | `awob-listener-backlight` |
 | `keyboard-backlight` | `awob-listener-keyboard-backlight` |
 

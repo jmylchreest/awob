@@ -62,7 +62,7 @@ hood). This works because `brightness` is genuinely *written* by
 userspace tools (brightnessctl, xbrightness, ACPI hotkeys), so
 inotify fires.
 
-`awob-listener-upower` was migrated to udev because `capacity` and
+`awob-listener-battery` was migrated to udev because `capacity` and
 `status` are computed at read time and never fire inotify events.
 
 Possible follow-up: migrate the backlight + keyboard-backlight

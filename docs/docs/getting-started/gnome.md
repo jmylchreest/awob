@@ -64,7 +64,7 @@ theme = "minimal"
 disable = ["pipewire", "backlight", "keyboard-backlight"]
 ```
 
-This leaves only `awob-listener-upower` running, so awob shows
+This leaves only `awob-listener-battery` running, so awob shows
 battery state and lets GNOME handle volume / brightness.
 
 ## Status

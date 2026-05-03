@@ -19,8 +19,8 @@ pub const KNOWN_LISTENERS: &[KnownListener] = &[
         binary: "awob-listener-pipewire",
     },
     KnownListener {
-        name: "upower",
-        binary: "awob-listener-upower",
+        name: "battery",
+        binary: "awob-listener-battery",
     },
     KnownListener {
         name: "backlight",

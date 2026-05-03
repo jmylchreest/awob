@@ -177,6 +177,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "awob-listener-battery"
+version = "0.0.1"
+dependencies = [
+ "awob-client",
+ "clap",
+ "nix 0.29.0",
+ "udev",
+]
+
+[[package]]
 name = "awob-listener-keyboard-backlight"
 version = "0.0.1"
 dependencies = [
@@ -193,16 +203,6 @@ dependencies = [
  "clap",
  "libspa",
  "pipewire",
-]
-
-[[package]]
-name = "awob-listener-upower"
-version = "0.0.1"
-dependencies = [
- "awob-client",
- "clap",
- "nix 0.29.0",
- "udev",
 ]
 
 [[package]]

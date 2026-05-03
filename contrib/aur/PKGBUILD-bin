@@ -33,7 +33,7 @@ package() {
         bin/awob \
         bin/awob-daemon \
         bin/awob-listener-pipewire \
-        bin/awob-listener-upower \
+        bin/awob-listener-battery \
         bin/awob-listener-backlight \
         bin/awob-listener-keyboard-backlight \
         bin/awob-listener-wob
