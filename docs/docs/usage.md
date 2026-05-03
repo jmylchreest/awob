@@ -12,33 +12,46 @@ listener see [Protocol](/protocol).
 
 ```mermaid
 flowchart LR
-    subgraph clients["Clients"]
-        L["awob-listener-*<br/><small>pipewire · upower · backlight ·<br/>keyboard-backlight · wob-fifo</small>"]
-        C["awob (CLI)<br/><small>send · query · theme</small>"]
-    end
+    PW[awob-listener-pipewire]
+    UP[awob-listener-upower]
+    BL[awob-listener-backlight]
+    KB[awob-listener-keyboard-backlight]
+    WB[awob-listener-wob<br/><small>FIFO compat</small>]
+    CLI[awob CLI<br/><small>send · query · theme</small>]
 
-    subgraph daemon["awob-daemon"]
-        direction TB
-        H["history map<br/>(source, event)"]
-        T["theme + bindings<br/>renderer"]
-        S["wlr-layer-shell<br/>surface"]
-        SUP["listener supervisor<br/>(auto-discovery)"]
-    end
+    D[awob-daemon<br/><small>history · theme · supervisor · wlr-layer-shell</small>]
+    W[Wayland compositor]
 
-    W["Wayland compositor"]
+    PW  --JSON-lines--> D
+    UP  --JSON-lines--> D
+    BL  --JSON-lines--> D
+    KB  --JSON-lines--> D
+    WB  --JSON-lines--> D
+    CLI --JSON-lines--> D
+    D --> W
 
-    L -->|JSON-lines<br/>unix socket| daemon
-    C -->|JSON-lines<br/>unix socket| daemon
-    daemon --> W
-    SUP -.spawns.-> L
+    D -.spawns + supervises.-> PW
+    D -.spawns + supervises.-> UP
+    D -.spawns + supervises.-> BL
+    D -.spawns + supervises.-> KB
 
-    classDef box fill:#1c1c23,stroke:#5fff5f,color:#f3e8d7;
-    classDef daemonBox fill:#11212f,stroke:#baea96,color:#f3e8d7;
-    classDef wayland fill:#1a1a22,stroke:#888,color:#f3e8d7;
-    class L,C box;
-    class H,T,S,SUP daemonBox;
+    classDef listener fill:#1c1c23,stroke:#5fff5f,color:#f3e8d7,stroke-width:1.5px;
+    classDef cli      fill:#1a1a22,stroke:#baea96,color:#f3e8d7,stroke-width:1.5px;
+    classDef daemon   fill:#11212f,stroke:#baea96,color:#f3e8d7,stroke-width:2px;
+    classDef wayland  fill:#15151b,stroke:#888,color:#f3e8d7;
+    class PW,UP,BL,KB,WB listener;
+    class CLI cli;
+    class D daemon;
     class W wayland;
+
+    linkStyle default stroke:#888,stroke-width:1.5px;
 ```
+
+Single arrow direction (left → right), every listener listed
+explicitly so the supervisor's spawn relationship reads cleanly.
+Listeners drive the daemon over JSON-lines on a Unix socket; the
+daemon owns the surface and forwards rendered frames to the Wayland
+compositor.
 
 * **`awob-daemon`** owns the surface and the IPC socket. One per
   Wayland session.

@@ -6,7 +6,7 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 rust-version.workspace = true
-description = "UPower listener: tracks battery state and renders OSD on level/charging changes."
+description = "Battery listener: tracks /sys/class/power_supply via udev uevents and renders OSD on level/charging changes."
 
 [[bin]]
 name = "awob-listener-upower"
@@ -15,4 +15,8 @@ path = "src/main.rs"
 [dependencies]
 awob-client.workspace = true
 clap = { version = "4", default-features = false, features = ["derive", "std"] }
-zbus = { version = "4", default-features = false, features = ["blocking", "async-io"] }
+# udev for kernel uevent subscription on the power_supply subsystem.
+# Replaced the prior zbus + UPower path so AC plug events are reported
+# instantly (UPower polled some events on a 30s timer).
+udev = "0.9"
+nix = { version = "0.29", features = ["poll"] }
