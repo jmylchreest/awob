@@ -67,6 +67,20 @@ clean:
 
 cargo_bin := env_var_or_default("CARGO_HOME", env_var("HOME") + "/.cargo") + "/bin"
 
+# Comprehensive system-dep install hint for new contributors. Pure
+# documentation — recipe just prints. Distro-detect is left to the
+# user. Mirrors the apt-get list in .github/workflows/ci.yml.
+deps-hint:
+    @echo "Debian / Ubuntu:"
+    @echo "  sudo apt install build-essential pkg-config \\"
+    @echo "    libfontconfig1-dev libfreetype6-dev \\"
+    @echo "    libpipewire-0.3-dev libdbus-1-dev \\"
+    @echo "    libudev-dev libxkbcommon-dev"
+    @echo ""
+    @echo "Arch:"
+    @echo "  sudo pacman -S base-devel pkgconf fontconfig freetype2 \\"
+    @echo "    pipewire dbus libxkbcommon"
+
 # Install every binary to $CARGO_HOME/bin (default ~/.cargo/bin).
 install:
     cargo install --path crates/awob-cli --locked

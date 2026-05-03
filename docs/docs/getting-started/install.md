@@ -37,15 +37,19 @@ On Debian / Ubuntu:
 ```sh
 sudo apt install build-essential pkg-config \
   libfontconfig1-dev libfreetype6-dev \
-  libpipewire-0.3-dev libdbus-1-dev libudev-dev
+  libpipewire-0.3-dev libdbus-1-dev \
+  libudev-dev libxkbcommon-dev
 ```
 
 On Arch:
 
 ```sh
 sudo pacman -S base-devel pkgconf fontconfig freetype2 \
-  pipewire dbus libudev0-shim
+  pipewire dbus libxkbcommon
 ```
+
+`just deps-hint` prints the equivalent for whichever distro you're
+on.
 
 Then:
 
