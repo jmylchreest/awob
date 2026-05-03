@@ -5,7 +5,11 @@
 /.cargo/config.toml.local
 
 # Project-local agent tooling state (sockets, caches, etc.).
-/.aide
+# `.aide/shared/` is committed — it carries shared agent context that
+# should be tracked across the team. Everything else in `.aide/` is
+# per-machine state and stays local.
+/.aide/*
+!/.aide/shared/
 /.claude
 
 # Docusaurus build output.
