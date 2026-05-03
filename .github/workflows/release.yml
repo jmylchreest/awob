@@ -152,6 +152,9 @@ jobs:
             awob-*.tar.gz.sha256
 
   package-aur:
+    # Render every binary PKGBUILD with @VERSION@ + @SHA256@ replaced.
+    # Stages each one into its own subdirectory so the matrixed publish
+    # step can `download-artifact` exactly the package it needs.
     name: render AUR PKGBUILDs
     needs: [prepare, build]
     runs-on: ubuntu-latest
@@ -163,35 +166,57 @@ jobs:
           path: artifacts
           merge-multiple: true
 
-      - name: Render PKGBUILD-bin
+      - name: Render PKGBUILDs
         env:
           VERSION: ${{ needs.prepare.outputs.version }}
         run: |
           set -euo pipefail
-          mkdir -p aur-bin
           tarball="artifacts/awob-${VERSION}-x86_64-unknown-linux-gnu.tar.gz"
           sha=$(sha256sum "$tarball" | cut -d' ' -f1)
-          sed -e "s/@VERSION@/${VERSION}/g" \
-              -e "s/@SHA256@/${sha}/g" \
-              contrib/aur/PKGBUILD-bin > aur-bin/PKGBUILD
-          cp contrib/aur/PKGBUILD-git aur-git-PKGBUILD
-          # Bundle PKGBUILDs into the release for easy manual install
-          # (one-off `curl PKGBUILD; makepkg -si`) without going through
-          # AUR. The AUR-publish job below mirrors the same files into
-          # the AUR repo.
-          cp aur-bin/PKGBUILD awob-${VERSION}.aur-bin.PKGBUILD
-          cp aur-git-PKGBUILD awob-${VERSION}.aur-git.PKGBUILD
 
-      - uses: actions/upload-artifact@v4
+          # Each binary PKGBUILD-* template renders to its own
+          # `aur-staged/<pkgname>/PKGBUILD`. The meta-package and the
+          # awob-git PKGBUILD just get @VERSION@ swapped.
+          mkdir -p aur-staged release-aur
+
+          render() {
+              local src="$1" pkgname="$2"
+              mkdir -p "aur-staged/${pkgname}"
+              sed -e "s/@VERSION@/${VERSION}/g" \
+                  -e "s/@SHA256@/${sha}/g" \
+                  "contrib/aur/${src}" > "aur-staged/${pkgname}/PKGBUILD"
+              # Bundle into the GH release for one-off `makepkg -si`
+              # without going through AUR.
+              cp "aur-staged/${pkgname}/PKGBUILD" \
+                 "release-aur/awob-${VERSION}.${pkgname}.PKGBUILD"
+          }
+
+          render PKGBUILD-bin                            awob-bin
+          render PKGBUILD-listener-pipewire-bin          awob-listener-pipewire-bin
+          render PKGBUILD-listener-battery-bin           awob-listener-battery-bin
+          render PKGBUILD-listener-backlight-bin         awob-listener-backlight-bin
+          render PKGBUILD-listener-keyboard-backlight-bin awob-listener-keyboard-backlight-bin
+          render PKGBUILD-listener-wob-bin               awob-listener-wob-bin
+          render PKGBUILD-listeners-all-bin              awob-listeners-all
+
+          # awob-git is unrendered (no @VERSION@ to substitute beyond
+          # the comment block), but ship it so the meta-set is complete.
+          mkdir -p aur-staged/awob-git
+          cp contrib/aur/PKGBUILD-git aur-staged/awob-git/PKGBUILD
+          cp aur-staged/awob-git/PKGBUILD \
+             "release-aur/awob-${VERSION}.awob-git.PKGBUILD"
+
+      - name: Upload rendered PKGBUILDs (release attachments)
+        uses: actions/upload-artifact@v4
         with:
           name: awob-${{ needs.prepare.outputs.version }}-aur
-          path: |
-            awob-*.aur-*.PKGBUILD
+          path: release-aur/awob-*.PKGBUILD
 
-      - uses: actions/upload-artifact@v4
+      - name: Upload staged AUR working dirs (per-pkg)
+        uses: actions/upload-artifact@v4
         with:
-          name: awob-${{ needs.prepare.outputs.version }}-aur-bin-staged
-          path: aur-bin/
+          name: awob-${{ needs.prepare.outputs.version }}-aur-staged
+          path: aur-staged/
 
   release:
     needs: [prepare, build, package-aur]
@@ -214,53 +239,40 @@ jobs:
           files: |
             dist/awob-*.tar.gz
             dist/awob-*.tar.gz.sha256
-            dist/awob-*.aur-*.PKGBUILD
+            dist/awob-*.PKGBUILD
 
-  aur-publish-bin:
-    # Push the rendered awob-bin PKGBUILD to AUR. Stable tags only —
-    # snapshots are noisy and shouldn't churn the AUR history.
-    name: publish awob-bin to AUR
+  aur-publish:
+    # Matrix-publish every AUR package on stable tag pushes. Snapshot
+    # prereleases (workflow_dispatch on main) skip — that history would
+    # be too noisy on AUR.
+    name: publish ${{ matrix.pkgname }} to AUR
     needs: [prepare, package-aur]
     runs-on: ubuntu-latest
     if: needs.prepare.outputs.is_release == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        pkgname:
+          - awob-bin
+          - awob-listener-pipewire-bin
+          - awob-listener-battery-bin
+          - awob-listener-backlight-bin
+          - awob-listener-keyboard-backlight-bin
+          - awob-listener-wob-bin
+          - awob-listeners-all
+          - awob-git
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: awob-${{ needs.prepare.outputs.version }}-aur-bin-staged
-          path: aur-bin
+          name: awob-${{ needs.prepare.outputs.version }}-aur-staged
+          path: aur-staged
 
-      - name: Publish to AUR (awob-bin)
-        uses: KSXGitHub/github-actions-deploy-aur@v4
+      - name: Publish ${{ matrix.pkgname }} to AUR
+        uses: KSXGitHub/github-actions-deploy-aur@v4.1.3
         with:
-          pkgname: awob-bin
-          pkgbuild: ./aur-bin/PKGBUILD
+          pkgname: ${{ matrix.pkgname }}
+          pkgbuild: ./aur-staged/${{ matrix.pkgname }}/PKGBUILD
           commit_username: jmylchreest
           commit_email: jmylchreest@gmail.com
           ssh_private_key: ${{ secrets.AUR_KEY }}
           commit_message: "release: v${{ needs.prepare.outputs.version }}"
-
-  aur-publish-git:
-    # awob-git tracks main. Re-push on each tag so its commit history
-    # follows releases — the PKGBUILD itself is unchanged unless the
-    # template is edited.
-    name: publish awob-git to AUR
-    needs: prepare
-    runs-on: ubuntu-latest
-    if: needs.prepare.outputs.is_release == 'true'
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Stage PKGBUILD-git
-        run: |
-          mkdir -p aur-git
-          cp contrib/aur/PKGBUILD-git aur-git/PKGBUILD
-
-      - name: Publish to AUR (awob-git)
-        uses: KSXGitHub/github-actions-deploy-aur@v4
-        with:
-          pkgname: awob-git
-          pkgbuild: ./aur-git/PKGBUILD
-          commit_username: jmylchreest
-          commit_email: jmylchreest@gmail.com
-          ssh_private_key: ${{ secrets.AUR_KEY }}
-          commit_message: "release: track v${{ needs.prepare.outputs.version }}"

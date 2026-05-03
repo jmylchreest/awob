@@ -1,25 +1,19 @@
 # Maintainer: John Mylchreest <jmylchreest@gmail.com>
 #
-# AUR binary package: pulls the prebuilt release tarball from
-# GitHub Releases. @VERSION@ and @SHA256@ are filled in at publish
-# time by the release workflow (see .github/workflows/release.yml,
-# eventually). Until automation lands, render manually with:
+# AUR binary package — daemon + CLI + themes + systemd unit. Listeners
+# ship as separate per-listener packages (see PKGBUILD-listener-*-bin)
+# or via the meta-package `awob-listeners-all`.
 #
-#   sed -e 's/@VERSION@/0.0.1/' -e "s/@SHA256@/$(sha256sum awob-*.tar.gz | cut -d' ' -f1)/" \
-#       contrib/aur/PKGBUILD-bin > /tmp/awob-bin/PKGBUILD
+# @VERSION@ and @SHA256@ are filled in at publish time by the release
+# workflow (see .github/workflows/release.yml).
 
 pkgname=awob-bin
 pkgver=@VERSION@
 pkgrel=1
-pkgdesc="Another Wayland Overlay Bar — drop-in replacement for wob with richer theming and typed IPC."
+pkgdesc="Another Wayland Overlay Bar — daemon + CLI."
 arch=('x86_64')
 url="https://github.com/jmylchreest/awob"
 license=('MIT')
-depends=('fontconfig' 'freetype2' 'pipewire' 'dbus' 'libudev.so')
-optdepends=(
-    'pactl: volume / mute keybinds'
-    'brightnessctl: brightness keybinds'
-)
 provides=('awob' 'awob-daemon')
 conflicts=('awob' 'awob-git')
 source=("awob-${pkgver}-x86_64-unknown-linux-gnu.tar.gz::https://github.com/jmylchreest/awob/releases/download/v${pkgver}/awob-${pkgver}-x86_64-unknown-linux-gnu.tar.gz")
@@ -28,24 +22,21 @@ sha256sums=('@SHA256@')
 package() {
     cd "awob-${pkgver}-x86_64-unknown-linux-gnu"
 
-    # Binaries.
+    # Daemon + CLI.
     install -Dm755 -t "${pkgdir}/usr/bin" \
         bin/awob \
-        bin/awob-daemon \
-        bin/awob-listener-pipewire \
-        bin/awob-listener-battery \
-        bin/awob-listener-backlight \
-        bin/awob-listener-keyboard-backlight \
-        bin/awob-listener-wob
+        bin/awob-daemon
 
-    # Default themes + shared palettes. Daemon's themes_dir defaults
-    # to ~/.config/awob/themes; users who want the stock themes copy
-    # them in or symlink. Packagers may prefer to install to
-    # /usr/share/awob/themes — adjust if you rebuild this PKGBUILD.
+    # Stock themes + shared palettes — daemon's themes_dir defaults to
+    # ~/.config/awob/themes, but having a system-wide fallback under
+    # /usr/share/awob/themes lets fresh users pick a theme without
+    # copying any files.
     install -dm755 "${pkgdir}/usr/share/awob"
     cp -r share/awob/themes "${pkgdir}/usr/share/awob/"
 
-    # systemd user unit.
+    # systemd user unit. Enable per-user with:
+    #   systemctl --user daemon-reload
+    #   systemctl --user enable --now awob.service
     install -Dm644 lib/systemd/user/awob.service \
         "${pkgdir}/usr/lib/systemd/user/awob.service"
 

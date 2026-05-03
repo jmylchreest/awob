@@ -10,14 +10,34 @@ pkgdesc="Another Wayland Overlay Bar (VCS build of latest main)"
 arch=('x86_64' 'aarch64')
 url="https://github.com/jmylchreest/awob"
 license=('MIT')
-depends=('fontconfig' 'freetype2' 'pipewire' 'dbus' 'libudev.so')
+depends=('pipewire' 'libudev.so')
 makedepends=('cargo' 'git' 'pkgconf')
 optdepends=(
     'pactl: volume / mute keybinds'
     'brightnessctl: brightness keybinds'
 )
-provides=('awob' 'awob-daemon')
-conflicts=('awob' 'awob-bin')
+# awob-git is the "kitchen sink" source build — it installs the daemon,
+# the CLI, every official listener, the systemd unit, and the stock
+# themes. So it conflicts with every binary package that ships any of
+# the same files.
+provides=(
+    'awob'
+    'awob-daemon'
+    'awob-listener-pipewire'
+    'awob-listener-battery'
+    'awob-listener-backlight'
+    'awob-listener-keyboard-backlight'
+    'awob-listener-wob'
+)
+conflicts=(
+    'awob'
+    'awob-bin'
+    'awob-listener-pipewire-bin'
+    'awob-listener-battery-bin'
+    'awob-listener-backlight-bin'
+    'awob-listener-keyboard-backlight-bin'
+    'awob-listener-wob-bin'
+)
 source=("git+${url}.git")
 sha256sums=('SKIP')
 
