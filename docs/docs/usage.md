@@ -80,6 +80,19 @@ If `<name>` can't be loaded, the daemon keeps the current theme and
 returns an error. At cold start, an unloadable theme falls back to
 the embedded default (so awob always comes up *something*).
 
+### `awob theme list`
+
+List every theme the daemon can resolve. Marks the active one with
+a `*`, shows source (`disk` or `embedded`), and prints the
+`description` field from each theme's `manifest.toml` if present.
+
+```
+* console        disk     Hacker/monospace look. Off-white-on-black with ANSI green; bar rendered as discrete cell blocks.
+  default        disk     Built-in default theme. Embedded in awob-daemon as the fallback.
+  minimal        disk
+  wob            disk
+```
+
 ### `awob theme reload`
 
 Reread the active theme's files. Manual trigger; the daemon also
