@@ -39,6 +39,16 @@ for THEME in "${THEMES[@]}"; do
     sleep 3.0
 done
 
+# Switch to default before the force-palette tests. The wob theme's
+# bar uses fill="$bar" (its own palette key) rather than fill="$accent",
+# so a force-palette overlay that only redefines accent colours
+# wouldn't reach the bar — wob is intentionally pixel-faithful and
+# stays white. The default theme uses $accent throughout, so the
+# overlay's hot-pink/cyan/lemon accents land on the bar visibly.
+say "switching to default theme for the force-palette tests"
+"$AWOB" theme set default
+sleep 0.4
+
 # Force-palette overlay live demo. The 'random' palette in
 # themes/_palettes/random.kdl is deliberately gaudy (hot pink, cyan,
 # lemon) so the overlay is visually obvious. We toggle it via
