@@ -1,0 +1,30 @@
+# cargo-release config.
+#
+# `just release-{patch,minor,major,rc}` invokes cargo-release which
+# bumps the workspace version, commits, tags, and (if `push` was
+# passed) pushes both. The release.yml workflow fires on the tag
+# push and builds + uploads the release artefacts.
+
+# One workspace-wide version. crates/* all carry version.workspace = true.
+shared-version = true
+
+# We don't ship to crates.io — awob is a binary workspace.
+publish = false
+
+# Don't auto-push; the Justfile handles push so it can be conditional.
+push = false
+
+# Tag every release as `v<version>` (matches release.yml's trigger).
+tag-name = "v{{version}}"
+
+# Conventional commit message. Matches the rosec / tinct style so a
+# log scan picks them out.
+pre-release-commit-message = "chore: release v{{version}}"
+
+# Sign commit + tag if the user has signing configured. Falls back
+# silently when no key is set up.
+sign-commit = true
+sign-tag = true
+
+# Belt-and-braces: clippy must be clean before any release.
+pre-release-hook = ["cargo", "clippy", "--workspace", "--all-targets", "--", "-D", "warnings"]

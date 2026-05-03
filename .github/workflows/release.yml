@@ -1,0 +1,171 @@
+# awob release pipeline.
+#
+# Triggered by:
+#   - tag push matching v*  → stable release (gates: clippy/fmt/test)
+#   - workflow_dispatch     → manual run; useful for re-running a
+#                             failed publish without re-tagging
+#
+# What it does:
+#   1. prepare:    derive version from tag (or git describe), decide
+#                  whether this is a release or prerelease.
+#   2. ci:         run the full CI gate (test + clippy + fmt) before
+#                  any artefact is built.
+#   3. build:      x86_64-unknown-linux-gnu native build of every
+#                  binary; tarball + sha256 per archive.
+#   4. release:    create / update the GitHub Release with the
+#                  artefacts. Stable for tag pushes; `snapshot`
+#                  prerelease for workflow_dispatch on main.
+#
+# Cross-compile to aarch64 / musl and AUR auto-publish are deferred
+# — see the FUTURES file for tracking.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      is_release: ${{ steps.version.outputs.is_release }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - id: version
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            version="${GITHUB_REF#refs/tags/v}"
+            echo "version=$version" >> "$GITHUB_OUTPUT"
+            echo "is_release=true" >> "$GITHUB_OUTPUT"
+          else
+            # Manual dispatch: derive a snapshot version.
+            base=$(grep -m1 '^version' Cargo.toml | sed -E 's/.*"(.*)".*/\1/')
+            commits=$(git rev-list --count HEAD)
+            sha=$(git rev-parse --short HEAD)
+            echo "version=${base}-dev.${commits}+${sha}" >> "$GITHUB_OUTPUT"
+            echo "is_release=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  ci:
+    needs: prepare
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential pkg-config \
+            libfontconfig1-dev libfreetype6-dev \
+            libpipewire-0.3-dev libdbus-1-dev libudev-dev
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo test --workspace --locked
+
+  build:
+    needs: [prepare, ci]
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            arch: x86_64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential pkg-config \
+            libfontconfig1-dev libfreetype6-dev \
+            libpipewire-0.3-dev libdbus-1-dev libudev-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release-${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --release --locked --workspace --target ${{ matrix.target }}
+
+      - name: Stage artefacts
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          stage="awob-${VERSION}-${TARGET}"
+          mkdir -p "$stage/bin"
+          for bin in awob awob-daemon \
+                     awob-listener-pipewire \
+                     awob-listener-upower \
+                     awob-listener-backlight \
+                     awob-listener-keyboard-backlight \
+                     awob-listener-wob; do
+              cp "target/${TARGET}/release/${bin}" "$stage/bin/"
+          done
+          # Bundle the default theme + palettes so the daemon can
+          # find them under /usr/share/awob/themes when packagers
+          # install accordingly.
+          mkdir -p "$stage/share/awob"
+          cp -r themes "$stage/share/awob/"
+          # systemd user unit and the example wob migration block
+          # ride along — packagers can drop them in the right place.
+          mkdir -p "$stage/lib/systemd/user"
+          cp contrib/systemd/awob.service "$stage/lib/systemd/user/"
+          cp LICENSE "$stage/"
+          cp README.md "$stage/"
+          tar -czf "${stage}.tar.gz" "$stage"
+          sha256sum "${stage}.tar.gz" > "${stage}.tar.gz.sha256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: awob-${{ needs.prepare.outputs.version }}-${{ matrix.target }}
+          path: |
+            awob-*.tar.gz
+            awob-*.tar.gz.sha256
+
+  release:
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    if: needs.prepare.outputs.is_release == 'true' || github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ needs.prepare.outputs.is_release == 'true' && format('v{0}', needs.prepare.outputs.version) || 'snapshot' }}
+          tag_name: ${{ needs.prepare.outputs.is_release == 'true' && github.ref_name || 'snapshot' }}
+          prerelease: ${{ needs.prepare.outputs.is_release != 'true' }}
+          generate_release_notes: ${{ needs.prepare.outputs.is_release == 'true' }}
+          files: |
+            dist/awob-*.tar.gz
+            dist/awob-*.tar.gz.sha256
