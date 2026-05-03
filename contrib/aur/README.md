@@ -24,9 +24,18 @@ systemctl --user enable --now awob.service
 ## Maintainer notes
 
 `PKGBUILD-bin` carries `@VERSION@` and `@SHA256@` placeholders that
-are filled in at release time. Until release-workflow automation
-lands ([FUTURES.md](../../FUTURES.md)), render the file by hand
-when bumping:
+the release workflow fills in automatically when a `v*` tag is
+pushed. The rendered PKGBUILD is uploaded as a release asset
+(`awob-<version>.aur-bin.PKGBUILD`) and pushed to AUR by the
+`aur-publish-bin` workflow job, gated on the repository secret
+`AUR_KEY` (an SSH private key whose public half is registered with
+aur.archlinux.org under the maintainer's account).
+
+`PKGBUILD-git` derives its `pkgver` at build time, so it doesn't
+need any rendering — the workflow ships it verbatim.
+
+To render manually for a one-off (e.g. testing a release tarball
+before tagging):
 
 ```sh
 VERSION=0.0.1
@@ -34,9 +43,3 @@ SHA256=$(curl -sL "https://github.com/jmylchreest/awob/releases/download/v${VERS
 sed -e "s/@VERSION@/${VERSION}/" -e "s/@SHA256@/${SHA256}/" \
     PKGBUILD-bin > /tmp/awob-bin/PKGBUILD
 ```
-
-Then push to AUR via your usual workflow (`makepkg --printsrcinfo`
-into `.SRCINFO`, commit, push to the AUR remote).
-
-`PKGBUILD-git` derives its `pkgver` at build time, so it doesn't
-need any rendering — `makepkg --noconfirm` works as-is.
