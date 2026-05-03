@@ -1,0 +1,59 @@
+# awob — systemd user service unit.
+#
+# Install:
+#   $ mkdir -p ~/.config/systemd/user
+#   $ cp contrib/systemd/awob.service ~/.config/systemd/user/
+#   $ systemctl --user daemon-reload
+#   $ systemctl --user enable --now awob.service
+#
+# Or, if your compositor uses uwsm / systemd graphical-session targets
+# (e.g. Hyprland with uwsm, gnome-session, etc.), the
+# `WantedBy=graphical-session.target` already wires it into your
+# session lifecycle. The unit will start when you log in and stop
+# cleanly when you log out.
+#
+# Override the theme, themes dir, or socket via a drop-in:
+#   $ systemctl --user edit awob.service
+#   [Service]
+#   Environment=AWOB_THEME=tinct
+#
+# This unit deliberately doesn't restart on *clean* exit (Type=simple
+# + Restart=on-failure) — the daemon owns the IPC socket, and a quick
+# respawn loop on missing-Wayland would just spam the journal.
+
+[Unit]
+Description=awob: Wayland on-screen-display overlay bar daemon
+Documentation=https://github.com/jmylchreest/awob
+PartOf=graphical-session.target
+After=graphical-session.target
+Requires=graphical-session.target
+ConditionEnvironment=WAYLAND_DISPLAY
+
+[Service]
+Type=simple
+ExecStart=%h/.cargo/bin/awob-daemon
+Restart=on-failure
+RestartSec=2
+
+# Logging goes to the user journal. Use `journalctl --user -u awob`.
+StandardOutput=journal
+StandardError=journal
+
+# Quality-of-life sandboxing. None of these block awob's normal
+# operation but reduce blast radius if the daemon misbehaves.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+ReadWritePaths=%t/awob.sock
+PrivateDevices=no       # backlight listener reads /sys/class/backlight
+ProtectKernelTunables=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+
+[Install]
+WantedBy=graphical-session.target
