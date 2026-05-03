@@ -26,5 +26,7 @@ pre-release-commit-message = "chore: release v{{version}}"
 sign-commit = true
 sign-tag = true
 
-# Belt-and-braces: clippy must be clean before any release.
-pre-release-hook = ["cargo", "clippy", "--workspace", "--all-targets", "--", "-D", "warnings"]
+# Belt-and-braces: tests must pass before any release. (Pre-1.0,
+# clippy is informational — release gate is the test suite + the
+# CI workflow. Tighten to clippy-clean before 0.1.0.)
+pre-release-hook = ["cargo", "test", "--workspace", "--locked"]

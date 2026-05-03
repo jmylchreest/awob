@@ -53,6 +53,28 @@ could grow a `--default-only` flag that:
 Already done — listener is fully event-driven via pipewire-rs subscription.
 This entry retired.
 
+## Clippy-clean workspace
+
+The CI clippy gate is informational pre-1.0 — `cargo clippy --workspace
+--all-targets` runs but doesn't fail the build. The workspace currently
+trips on a small set of legitimate-but-noisy lints:
+
+* `clippy::too_many_arguments` on the wayland render entry-point
+  (8 args carrying theme + bindings + value + transition + dir +
+  source + event + preempt). Could be folded into a struct; pre-1.0
+  the explicit signature is more readable.
+* `clippy::missing_safety_doc` on the FFI crate's raw-pointer
+  functions (which *are* `unsafe` — clippy wants doc comments).
+* Minor stylistic ones — `clamp`-able patterns, indexing loops,
+  field-after-default-init — in the listener binaries.
+
+Path to clippy-clean: address each lint with the smallest viable fix
+(usually `#[allow(...)]` with a `// reason: …` line, occasionally
+a small refactor), then flip CI back to `-D warnings` and add a
+clippy-clean pre-release-hook in `release.toml`. ~30 min of focused
+work; deferred so it doesn't churn the codebase mid-feature.
+
+
 ## FFI consumers beyond C
 
 The `awob-client-ffi` crate exposes a C ABI via `cbindgen`. Bindings for

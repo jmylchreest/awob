@@ -462,8 +462,8 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             }
 
             let identity = match kind {
-                NodeKind::Device => identity_for_device(&props),
-                NodeKind::App => identity_for_app(&props, &per_app_binaries),
+                NodeKind::Device => identity_for_device(props),
+                NodeKind::App => identity_for_app(props, &per_app_binaries),
             };
             let identity = match identity {
                 Some(i) => i,

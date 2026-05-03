@@ -538,11 +538,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 let name = s.theme.name.clone();
                 let root = s.themes_root.clone();
                 let force_palette = s.force_palette.clone();
-                match theme_loader::load(
-                    root.as_deref(),
-                    &name,
-                    force_palette.as_deref(),
-                ) {
+                match theme_loader::load(root.as_deref(), &name, force_palette.as_deref()) {
                     Ok(t) => {
                         s.theme = t;
                         s.rewatch();

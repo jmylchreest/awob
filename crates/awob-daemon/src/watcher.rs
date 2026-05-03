@@ -56,10 +56,8 @@ impl ThemeWatcher {
         }
 
         for dir in &dirs {
-            if dir.exists() {
-                if self.inner.watch(dir, RecursiveMode::NonRecursive).is_ok() {
-                    self.watching.push(dir.clone());
-                }
+            if dir.exists() && self.inner.watch(dir, RecursiveMode::NonRecursive).is_ok() {
+                self.watching.push(dir.clone());
             }
         }
         self.watching.clone()
