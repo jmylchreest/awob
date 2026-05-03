@@ -32,6 +32,10 @@ pub enum Request {
         #[serde(default)]
         persist: bool,
     },
+    /// List every theme the daemon can find on disk plus the embedded
+    /// fallback. Each entry carries metadata derived from the theme's
+    /// optional `manifest.toml`.
+    ThemeList,
     Reload,
     Version,
 }
@@ -43,7 +47,25 @@ pub enum Response {
     Error { message: String },
     Hello { protocol: u32, daemon_version: String },
     Query { entries: Vec<HistoryEntry> },
+    ThemeList { themes: Vec<ThemeInfo> },
     Version { daemon_version: String, protocol: u32 },
+}
+
+/// One theme entry returned by `Request::ThemeList`. `name` is what
+/// you'd pass to `SetTheme`; `description` is best-effort metadata
+/// pulled from a sibling `manifest.toml` if present.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ThemeInfo {
+    pub name: String,
+    /// `true` if this theme is currently active in the daemon.
+    pub active: bool,
+    /// `"embedded"` for the in-binary fallback; `"disk"` for any
+    /// theme loaded from the configured `themes_dir`.
+    pub source: String,
+    /// First non-empty value from the theme's `manifest.toml`'s
+    /// `description` key, or `None` if no manifest is present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

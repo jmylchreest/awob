@@ -72,6 +72,8 @@ enum ThemeCmd {
         #[arg(long)]
         persist: bool,
     },
+    /// List every theme the daemon can resolve.
+    List,
     Reload,
 }
 
@@ -115,6 +117,15 @@ fn run(cli: Cli) -> Result<(), awob_client::Error> {
             Ok(())
         }
         Cmd::Theme(ThemeCmd::Set { name, persist }) => c.set_theme_with(name, persist),
+        Cmd::Theme(ThemeCmd::List) => {
+            for t in c.theme_list()? {
+                let marker = if t.active { "*" } else { " " };
+                let desc = t.description.as_deref().unwrap_or("");
+                // <marker> <name padded to 14> <source padded to 8> <description>
+                println!("{marker} {:<14} {:<8} {desc}", t.name, t.source);
+            }
+            Ok(())
+        }
         Cmd::Theme(ThemeCmd::Reload) => c.reload(),
         Cmd::Version => {
             let (daemon, proto) = c.version()?;

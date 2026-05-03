@@ -120,6 +120,16 @@ impl Client {
         }
     }
 
+    /// List every theme the daemon can resolve, plus the embedded
+    /// fallback. Each entry carries `active`, `source`, optional
+    /// `description` from the theme's `manifest.toml`.
+    pub fn theme_list(&mut self) -> Result<Vec<awob_protocol::ThemeInfo>> {
+        match self.request(&Request::ThemeList)? {
+            Response::ThemeList { themes } => Ok(themes),
+            other => Err(Error::UnexpectedResponse(other)),
+        }
+    }
+
     pub fn reload(&mut self) -> Result<()> {
         match self.request(&Request::Reload)? {
             Response::Ok => Ok(()),

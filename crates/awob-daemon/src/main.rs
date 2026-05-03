@@ -184,6 +184,9 @@ impl Shared {
                     Err(e) => Response::Error { message: format!("reload: {e}") },
                 }
             }
+            Request::ThemeList => Response::ThemeList {
+                themes: enumerate_themes(self.themes_root.as_deref(), &self.theme.name),
+            },
             Request::Version => Response::Version {
                 daemon_version: env!("CARGO_PKG_VERSION").into(),
                 protocol: PROTOCOL_VERSION,
@@ -191,6 +194,66 @@ impl Shared {
         }
     }
 
+}
+
+/// Walk `themes_root` and return one [`ThemeInfo`] per subdirectory
+/// containing a `scene.kdl`, plus the embedded fallback if it isn't
+/// already represented by an on-disk theme of the same name.
+///
+/// `description` is read best-effort from a sibling `manifest.toml`'s
+/// top-level `description = "..."` key. Anything else in the manifest
+/// is ignored — see THEMES.md for the full list of conventional fields.
+fn enumerate_themes(
+    themes_root: Option<&Path>,
+    active_name: &str,
+) -> Vec<awob_protocol::ThemeInfo> {
+    use awob_protocol::ThemeInfo;
+    let mut out: Vec<ThemeInfo> = Vec::new();
+
+    if let Some(root) = themes_root {
+        if let Ok(read) = std::fs::read_dir(root) {
+            for entry in read.flatten() {
+                let dir = entry.path();
+                if !dir.is_dir() { continue; }
+                let scene = dir.join("scene.kdl");
+                if !scene.exists() { continue; }
+                let Some(name) = dir.file_name().and_then(|s| s.to_str()) else { continue; };
+                let description = read_manifest_description(&dir.join("manifest.toml"));
+                out.push(ThemeInfo {
+                    name: name.to_string(),
+                    active: name == active_name,
+                    source: "disk".into(),
+                    description,
+                });
+            }
+        }
+    }
+    // Always surface the embedded default. If the on-disk version
+    // shadows it (same name), keep the disk entry — the daemon
+    // would load that one anyway.
+    if !out.iter().any(|t| t.name == theme_loader::EMBEDDED_DEFAULT_NAME) {
+        out.push(ThemeInfo {
+            name: theme_loader::EMBEDDED_DEFAULT_NAME.into(),
+            active: theme_loader::EMBEDDED_DEFAULT_NAME == active_name,
+            source: "embedded".into(),
+            description: Some(
+                "Built-in default theme. Embedded in awob-daemon as the fallback.".into(),
+            ),
+        });
+    }
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    out
+}
+
+/// Pull `description` out of a theme's `manifest.toml`. Returns
+/// `None` for any failure mode (missing file, unreadable, malformed,
+/// no `description` key, empty value) — the manifest is
+/// best-effort metadata, never a load-blocking concern.
+fn read_manifest_description(path: &Path) -> Option<String> {
+    let raw = std::fs::read_to_string(path).ok()?;
+    let parsed: toml::Value = toml::from_str(&raw).ok()?;
+    let s = parsed.get("description")?.as_str()?.trim();
+    if s.is_empty() { None } else { Some(s.to_string()) }
 }
 
 /// Combine explicit `[[listeners]]` with auto-discovered known listeners
