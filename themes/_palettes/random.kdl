@@ -1,23 +1,37 @@
-// Test/demo palette with deliberately gaudy colours.
+// Test/demo palette — deliberately *garish* so every palette-driven
+// element is unmissable when the overlay applies. Each key uses a
+// fully-saturated, no-alpha colour with high contrast against its
+// neighbours; the goal is "you cannot miss that this is a different
+// theme", not aesthetics.
 //
-// Drop this in via `--force-palette themes/_palettes/random.kdl` to
-// confirm that the late-import overlay actually wins against any
-// theme's own palette: every stock theme should suddenly render in
-// hot pink + cyan + lemon. If you see the original theme colours
-// instead, the overlay path isn't taking effect.
+// Mapped in stock scene files (default, light) as:
 //
-// Hot-reloadable: edit any colour below and re-fire an OSD; the
-// daemon's watcher follows the force-palette file like any import.
+//   $bg     → surface fill (the rounded plate)
+//   $fg     → text colour (label + percentage)
+//   $track  → empty bar background
+//   $accent → bar fill (resolved per-style — see styles below)
+//
+// Caveat: this overlay can't change icon colours unless the scene's
+// image element carries `colour="$fg"`. Multicolour SVGs (e.g.
+// Adwaita's `audio-volume-high.svg`) render as authored — only
+// symbolic SVGs auto-tint to $fg. To make icons follow the overlay,
+// edit the theme's scene file to add the `colour` attr (the default
+// theme deliberately doesn't, to preserve multicolour app icons).
+//
+// Drop in via `awob force-palette set themes/_palettes/random.kdl`
+// or `awob-daemon --force-palette themes/_palettes/random.kdl`. The
+// overlay is hot-reloadable: edit any colour and re-fire an OSD,
+// the daemon's watcher follows this file.
 
 palette {
-    bg     "rgba(40,8,30,0.92)"
-    fg     "#fffacd"
-    track  "rgba(255,255,255,0.10)"
-    low    "#7fffd4"
-    normal "#ff69b4"
-    warn   "#ffa500"
-    crit   "#ff1493"
-    muted  "#9370db"
+    bg     "#ff00aa"   // hot pink surface — full saturation, no alpha
+    fg     "#00ff80"   // lime green text
+    track  "#ffff00"   // bright yellow empty-bar track
+    low    "#00ffff"   // cyan
+    normal "#ff7f00"   // orange (default style → bar fill)
+    warn   "#ff00ff"   // magenta
+    crit   "#ff0000"   // pure red
+    muted  "#444444"   // dark grey
 }
 
 styles {
