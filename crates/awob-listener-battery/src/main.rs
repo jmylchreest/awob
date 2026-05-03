@@ -35,13 +35,22 @@ const SYSFS_ROOT: &str = "/sys/class/power_supply";
 /// keeps the OSD in sync with reality even after a suspend / resume.
 const RESCAN_INTERVAL: Duration = Duration::from_secs(60);
 
-/// Schedule an extra read this far after every uevent. On AC plug the
-/// kernel often fires the `power_supply` uevent for the AC adapter
-/// (`ACAD/online`) BEFORE the battery driver has updated `BAT*/status`
-/// to `"Charging"`. A single read at uevent time can therefore observe
-/// the *old* battery state. The follow-up refresh catches the lagged
-/// transition without making us poll continuously.
-const EVENT_FOLLOWUP: Duration = Duration::from_millis(800);
+/// After any power_supply uevent, poll sysfs at this cadence for
+/// `BURST_DURATION` to catch lagged state transitions. Why:
+///
+/// On AC plug the kernel fires two events in sequence — first for the
+/// AC adapter (`ACAD/online=1`), then for the battery (`BAT*/status
+/// =Charging`). On some hardware (Dell, ThinkPad, Framework) the
+/// battery driver polls its embedded controller on a timer, so the
+/// BAT event can lag the AC event by 1–10 seconds. A single read at
+/// AC-event time observes the *old* battery state. Polling every
+/// second for `BURST_DURATION` catches the transition reliably.
+///
+/// Outside burst mode we fall back to the cheap `RESCAN_INTERVAL`
+/// backstop. Once 60 s elapses without an event, we resume the
+/// 60 s rescan rhythm.
+const BURST_POLL_INTERVAL: Duration = Duration::from_secs(1);
+const BURST_DURATION: Duration = Duration::from_secs(5);
 
 #[derive(Parser, Debug)]
 #[command(version, about = "awob — battery listener (sysfs + udev)")]
@@ -324,29 +333,41 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
 
     let mut last: Option<(BatteryState, i32)> = None;
     let mut last_rescan = Instant::now();
-    // When set, do an extra read at this instant — see `EVENT_FOLLOWUP`.
-    let mut followup_at: Option<Instant> = None;
+    // Per-battery cache of state + capacity, keyed by the kernel's
+    // POWER_SUPPLY_NAME. Updated authoritatively by uevent properties
+    // when battery events fire; refreshed from sysfs otherwise.
+    // Aggregated for every send so multi-battery systems produce one
+    // OSD per change.
+    let mut cache: std::collections::HashMap<String, BatteryReading> =
+        std::collections::HashMap::new();
+    // Burst-poll window: extended on every uevent. While `Some` and
+    // not yet elapsed we tighten the wait to BURST_POLL_INTERVAL and
+    // re-read sysfs each tick — handles hardware where the battery
+    // driver lags AC plug events.
+    let mut burst_until: Option<Instant> = None;
 
-    // Initial fire so the OSD has current state at startup.
-    refresh_and_send(
-        &batteries,
-        &cli.socket,
-        &source,
-        &state_filter,
-        &mut last,
-        true,
-    );
+    // Seed the cache from sysfs and fire the initial OSD.
+    for path in &batteries {
+        if let Some(r) = read_battery(path) {
+            let name = path
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("")
+                .to_string();
+            cache.insert(name, r);
+        }
+    }
+    refresh_and_send(&cache, &cli.socket, &source, &state_filter, &mut last, true);
 
     loop {
-        // Wait for the soonest of: (a) a uevent on the udev socket,
-        // (b) the cascade follow-up after a recent uevent, (c) the
-        // periodic rescan backstop.
         let now = Instant::now();
-        let until_followup = followup_at
-            .map(|t| t.saturating_duration_since(now))
-            .unwrap_or(Duration::MAX);
+        let in_burst = burst_until.map(|t| now < t).unwrap_or(false);
         let until_rescan = RESCAN_INTERVAL.saturating_sub(now.duration_since(last_rescan));
-        let wait = until_followup.min(until_rescan);
+        let wait = if in_burst {
+            BURST_POLL_INTERVAL.min(burst_until.unwrap().saturating_duration_since(now))
+        } else {
+            until_rescan
+        };
         let timeout_ms: i32 = wait.as_millis().min(i32::MAX as u128) as i32;
         let mut pfds = [PollFd::new(monitor_fd, PollFlags::POLLIN)];
         let timeout = PollTimeout::try_from(timeout_ms).unwrap_or(PollTimeout::NONE);
@@ -356,37 +377,101 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             Err(e) => return Err(format!("poll: {e}").into()),
         }
 
-        // Drain any pending udev events. We don't actually inspect
-        // them — the trigger alone is enough to prompt a refresh.
+        // Drain udev events. For each Battery-type event, update the
+        // cache from event properties — that's the kernel-authoritative
+        // state at announce time, with no sysfs race. Events for AC
+        // adapters / USB-PD don't carry battery state so they only
+        // serve to extend the burst window.
         let mut got_event = false;
-        for _ in monitor.iter() {
+        let mut got_battery_event = false;
+        for ev in monitor.iter() {
             got_event = true;
+            if update_cache_from_event(&mut cache, &ev) {
+                got_battery_event = true;
+            }
         }
 
         let now = Instant::now();
-        let followup_due = followup_at.map(|t| now >= t).unwrap_or(false);
+        if got_event {
+            burst_until = Some(now + BURST_DURATION);
+        }
+        let still_in_burst = burst_until.map(|t| now < t).unwrap_or(false);
         let due_for_rescan = now.duration_since(last_rescan) >= RESCAN_INTERVAL;
 
-        if got_event || followup_due || due_for_rescan {
-            refresh_and_send(
-                &batteries,
-                &cli.socket,
-                &source,
-                &state_filter,
-                &mut last,
-                false,
-            );
+        // Re-read sysfs as the safety net: catches state transitions
+        // on hardware whose battery driver doesn't fire its own uevent
+        // promptly after AC plug. Battery events update the cache
+        // first (above), so this is a redundant write for those.
+        let need_sysfs_refresh = !got_battery_event && (got_event || still_in_burst || due_for_rescan);
+        if need_sysfs_refresh {
+            for path in &batteries {
+                if let Some(r) = read_battery(path) {
+                    let name = path
+                        .file_name()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("")
+                        .to_string();
+                    cache.insert(name, r);
+                }
+            }
+        }
+
+        if got_event || still_in_burst || due_for_rescan {
+            refresh_and_send(&cache, &cli.socket, &source, &state_filter, &mut last, false);
             last_rescan = now;
-            // After any uevent, schedule a follow-up read to catch a
-            // possibly-lagged BAT/status transition. A follow-up that
-            // already fired clears the slot.
-            followup_at = if got_event {
-                Some(now + EVENT_FOLLOWUP)
-            } else {
-                None
-            };
+        }
+        if !still_in_burst {
+            burst_until = None;
         }
     }
+}
+
+/// Apply a power_supply uevent to the cache. Returns `true` if the
+/// event was for a Battery-type device whose state we extracted.
+/// Non-battery events (AC adapters, USB-PD ports) return `false` —
+/// they still extend the burst window from the caller's side, but
+/// they don't update battery cache directly.
+fn update_cache_from_event(
+    cache: &mut std::collections::HashMap<String, BatteryReading>,
+    event: &udev::Event,
+) -> bool {
+    let dev = event.device();
+    let typ = dev
+        .property_value("POWER_SUPPLY_TYPE")
+        .and_then(|s| s.to_str().map(String::from));
+    if typ.as_deref() != Some("Battery") {
+        return false;
+    }
+    let Some(name) = dev
+        .property_value("POWER_SUPPLY_NAME")
+        .and_then(|s| s.to_str().map(String::from))
+    else {
+        return false;
+    };
+    let status = dev
+        .property_value("POWER_SUPPLY_STATUS")
+        .and_then(|s| s.to_str())
+        .map(BatteryState::from_sysfs)
+        .unwrap_or(BatteryState::Unknown);
+    let capacity = dev
+        .property_value("POWER_SUPPLY_CAPACITY")
+        .and_then(|s| s.to_str())
+        .and_then(|s| s.parse::<f64>().ok());
+
+    // Preserve the existing weight (set from sysfs at startup).
+    // Without it, multi-battery aggregation collapses to a flat mean.
+    let weight = cache.get(&name).map(|r| r.weight).unwrap_or(1.0);
+    cache.insert(
+        name,
+        BatteryReading {
+            capacity: capacity.unwrap_or_else(|| {
+                cache.values().next().map(|r| r.capacity).unwrap_or(0.0)
+            }),
+            state: status,
+            weight,
+        },
+    );
+    true
 }
 
 /// Read every battery, aggregate, and fire an OSD if either the
@@ -394,14 +479,14 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
 /// fires unconditionally (used at startup so the initial state hits
 /// the screen even if nothing's changed since the last daemon boot).
 fn refresh_and_send(
-    batteries: &[PathBuf],
+    cache: &std::collections::HashMap<String, BatteryReading>,
     socket: &Option<PathBuf>,
     source: &str,
     state_filter: &HashSet<BatteryState>,
     last: &mut Option<(BatteryState, i32)>,
     force: bool,
 ) {
-    let readings: Vec<BatteryReading> = batteries.iter().filter_map(|p| read_battery(p)).collect();
+    let readings: Vec<BatteryReading> = cache.values().cloned().collect();
     let Some((pct, state)) = aggregate(&readings) else {
         return;
     };
