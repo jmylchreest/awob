@@ -53,6 +53,29 @@ could grow a `--default-only` flag that:
 Already done — listener is fully event-driven via pipewire-rs subscription.
 This entry retired.
 
+## Migrate backlight / keyboard-backlight listeners to udev
+
+Currently the `awob-listener-backlight` and
+`awob-listener-keyboard-backlight` binaries watch their respective
+`brightness` sysfs files via the `notify` crate (inotify under the
+hood). This works because `brightness` is genuinely *written* by
+userspace tools (brightnessctl, xbrightness, ACPI hotkeys), so
+inotify fires.
+
+`awob-listener-upower` was migrated to udev because `capacity` and
+`status` are computed at read time and never fire inotify events.
+
+Possible follow-up: migrate the backlight + keyboard-backlight
+listeners to udev too, for architectural uniformity (every sysfs-
+aware listener using the same primitive). No responsiveness gain
+expected — both fire instantly on the relevant changes today.
+Trade-off: drops the `notify` dep across these two crates (~150 KB
+saved in compiled binary size); adds nothing the user sees.
+
+Cost: ~30 min per listener. Defer until consistency review or new
+contributor onboarding wants the simpler mental model.
+
+
 ## Clippy-clean workspace
 
 The CI clippy gate is informational pre-1.0 — `cargo clippy --workspace
