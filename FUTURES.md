@@ -5,24 +5,6 @@ describes the ask, what would need to change, and an estimate of effort so
 you can prioritise.
 
 
-## Auto-detect wob's overflow state (value > max)
-
-Upstream wob has a separate set of colours (`overflow_background_color`,
-`overflow_border_color`, `overflow_bar_color`) automatically applied
-when the incoming value exceeds the max — useful for "volume above
-100%" indications. Awob's `themes/wob/scene.kdl` defines an
-`overflow` style block with the right palette entries, but it's
-*manually* applied today: callers have to send
-`awob send --style overflow <value> <max>` to get the red-on-black
-look.
-
-To auto-apply, the daemon would notice `payload.value > payload.max`
-in `Send` handling and set `bindings.style = "overflow"` (overriding
-any sender-provided style). ~10 LOC. Holding off until a user asks
-because the manual path covers it for now and an auto-style affects
-non-wob themes too (which may not have an `overflow` style defined).
-
-
 ## Friendly keyboard names from udev
 
 External USB keyboards often expose vendor + product strings up their

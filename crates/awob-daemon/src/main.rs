@@ -116,7 +116,16 @@ impl Shared {
                 let mut bindings =
                     awob_core::bindings::build(&payload, last_value, last_max, last_seen);
                 bindings.palette = self.theme.theme.palette.clone();
-                let style_to_apply = payload.style.as_deref().unwrap_or("normal");
+                // Auto-detect wob's overflow state: value > max forces
+                // the `overflow` style regardless of what the sender
+                // asked for. Themes that don't define an `overflow`
+                // style block silently no-op (apply_style is lenient
+                // on missing names) so this is backwards-compatible.
+                let style_to_apply: &str = if payload.value > payload.max {
+                    "overflow"
+                } else {
+                    payload.style.as_deref().unwrap_or("normal")
+                };
                 let _ = apply_style(&self.theme.theme, &mut bindings, style_to_apply);
                 if let Some(accent_override) = &payload.accent {
                     bindings.set("accent", awob_core::Value::String(accent_override.clone()));

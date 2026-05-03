@@ -46,9 +46,11 @@ styles {
     style "critical" bg="$bg" border="$border" bar="$bar"
     style "muted"    bg="$bg" border="$border" bar="$bar"
 
-    // Wob's overflow state, manually applicable as
-    // `awob send --style overflow <value> <max>` until awob grows
-    // automatic detection of `value > max`.
+    // Wob's overflow state. Auto-applied by the daemon when
+    // `value > max`, matching upstream wob's behaviour. Override
+    // the overflow_* palette keys above for a different overflow
+    // look; this block just plumbs them through to the bg / border
+    // / bar bindings the scene reads.
     style "overflow" bg="$overflow_bg" border="$overflow_border" bar="$overflow_bar"
 }
 
