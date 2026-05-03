@@ -1,7 +1,11 @@
+---
+title: Protocol
+---
+
 # awob: protocol + listener author guide
 
-For end-user CLI / config see [`USAGE.md`](USAGE.md); for theme
-authoring see [`THEMES.md`](THEMES.md). This document is for people
+For end-user CLI / config see [Usage](/usage); for theme
+authoring see [Themes](/themes). This document is for people
 writing new event-source listeners or tools that talk to the daemon
 directly.
 

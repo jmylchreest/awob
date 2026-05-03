@@ -1,8 +1,12 @@
+---
+title: Usage
+---
+
 # awob: usage guide
 
 End-user reference. For theme authoring see
-[`THEMES.md`](THEMES.md); for the wire protocol or building a new
-listener see [`PROTOCOL.md`](PROTOCOL.md).
+[Themes](/themes); for the wire protocol or building a new
+listener see [Protocol](/protocol).
 
 ## Architecture
 
@@ -220,7 +224,7 @@ The daemon watches:
 
 Edit any of those, save, and the next OSD render uses the new theme.
 External palette generators (e.g.
-[tinct](../../tinct/)) take advantage of this — they refresh
+[tinct](https://github.com/jmylchreest/tinct)) take advantage of this — they refresh
 `_palettes/<name>.kdl` and every consuming theme picks it up.
 
 ## Troubleshooting
@@ -231,5 +235,5 @@ External palette generators (e.g.
 | `connection refused` from the CLI | Daemon's socket missing. Default `$XDG_RUNTIME_DIR/awob.sock`; check daemon stderr for the path it's actually listening on. |
 | Theme didn't change after edit | The watcher is set up after the first successful theme load. If the initial load failed, no files are watched — fix the parse error and `awob theme reload`. |
 | Listener not spawning | `which awob-listener-<name>` — auto-discovery only finds binaries on `$PATH` or in the daemon's own dir. Check `[supervisor] disable`. |
-| `image-missing-symbolic` glyph showing | Icon name didn't resolve. Theme can override by shipping `icons/image-missing-symbolic.svg` in its directory; see [`THEMES.md`](THEMES.md#icons). |
+| `image-missing-symbolic` glyph showing | Icon name didn't resolve. Theme can override by shipping `icons/image-missing-symbolic.svg` in its directory; see [Themes → Icons](/themes#icons). |
 | Old `wob` daemon also running | Two processes on the same FIFO will race. `pkill wob`. |

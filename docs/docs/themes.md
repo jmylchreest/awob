@@ -1,3 +1,7 @@
+---
+title: Themes
+---
+
 # Theme author guide
 
 Themes are small directories under `~/.config/awob/themes/<name>/`
@@ -248,7 +252,7 @@ entry is processed last wins, key by key**.
 | Pattern | When to use |
 |---|---|
 | Inline `palette { … }` only | Standalone, single-file theme. No external dependency. |
-| `import "../_palettes/X.kdl"` only | Theme that wants the shared palette as-is. Generator-managed (e.g. [tinct](../../tinct/)) or reused by multiple themes. |
+| `import "../_palettes/X.kdl"` only | Theme that wants the shared palette as-is. Generator-managed (e.g. [tinct](https://github.com/jmylchreest/tinct)) or reused by multiple themes. |
 | Import **plus** inline `palette { … }` | Pull in the shared base, then override a few keys. Idiomatic order: `import` first, then a local block with the tweaks. |
 
 Concrete merge behaviour:
@@ -277,7 +281,7 @@ keep when you're doing more than a one-off theme:
 * **Cross-theme reuse.** `default` and `minimal` both want the
   tinct palette; one file, two consumers.
 * **Generator-friendly.** Tools like
-  [tinct](../../tinct/) regenerate `_palettes/<name>.kdl`
+  [tinct](https://github.com/jmylchreest/tinct) regenerate `_palettes/<name>.kdl`
   in place; the daemon's hot-reload watcher follows imports
   transitively, so every consuming theme picks up the change with
   no daemon restart.

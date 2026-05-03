@@ -22,7 +22,7 @@
 # respawn loop on missing-Wayland would just spam the journal.
 
 [Unit]
-Description=awob: Wayland on-screen-display overlay bar daemon
+Description=Another Wayland Overlay Bar
 Documentation=https://github.com/jmylchreest/awob
 PartOf=graphical-session.target
 After=graphical-session.target

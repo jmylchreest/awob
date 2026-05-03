@@ -1,0 +1,28 @@
+/**
+ * awob docs theme overrides. Built on top of Docusaurus's classic
+ * theme. Tweaks: punchier accent, code-block tone matched to the
+ * "tinct" palette the daemon ships with.
+ */
+
+:root {
+  --ifm-color-primary: #5a9c54;
+  --ifm-color-primary-dark: #50864b;
+  --ifm-color-primary-darker: #4b7e47;
+  --ifm-color-primary-darkest: #3d683a;
+  --ifm-color-primary-light: #6db367;
+  --ifm-color-primary-lighter: #79bc73;
+  --ifm-color-primary-lightest: #94cd8f;
+  --ifm-code-font-size: 92%;
+  --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.08);
+}
+
+[data-theme="dark"] {
+  --ifm-color-primary: #baea96;
+  --ifm-color-primary-dark: #a8e57e;
+  --ifm-color-primary-darker: #9fe371;
+  --ifm-color-primary-darkest: #7ed849;
+  --ifm-color-primary-light: #cceeae;
+  --ifm-color-primary-lighter: #d5f1bb;
+  --ifm-color-primary-lightest: #ebf8de;
+  --docusaurus-highlighted-code-line-bg: rgba(255, 255, 255, 0.08);
+}

@@ -58,14 +58,25 @@ awob theme set tinct --persist  # also rewrites awob.toml so it survives restart
 
 ## Documentation
 
-* [`docs/USAGE.md`](docs/USAGE.md) — CLI reference, `awob.toml` config,
-  architecture overview, **migrating from wob**, troubleshooting.
-* [`docs/THEMES.md`](docs/THEMES.md) — theme creator guide: scene file
-  layout, element reference, expression language, palette imports,
-  `manifest.toml` conventions.
-* [`docs/PROTOCOL.md`](docs/PROTOCOL.md) — wire protocol + listener
-  author guide: every Request/Response, SendPayload fields including
-  `preempt`, history keying, building a new listener.
+The full docs site lives at <https://jmylchreest.github.io/awob/>.
+Source markdown is under [`docs/docs/`](docs/docs/) — Docusaurus 3
+project rooted at [`docs/`](docs/).
+
+Key entry points:
+
+* [Getting Started → Install](docs/docs/getting-started/install.md)
+  — distro packages, building from source, the systemd unit.
+* [Getting Started → Quick start](docs/docs/getting-started/quickstart.md)
+* [Getting Started → Hyprland](docs/docs/getting-started/hyprland.md)
+  / [GNOME](docs/docs/getting-started/gnome.md)
+  / [Sway](docs/docs/getting-started/sway.md)
+* [Getting Started → Migrating from wob](docs/docs/getting-started/migrating-from-wob.md)
+* [Usage reference](docs/docs/usage.md) — CLI, `awob.toml`,
+  troubleshooting.
+* [Themes](docs/docs/themes.md) — scene file structure, element
+  reference, expression language, palettes.
+* [Protocol](docs/docs/protocol.md) — wire format + listener
+  author guide.
 * [`FUTURES.md`](FUTURES.md) — deferred work tracked for later iterations.
 
 ## Status
