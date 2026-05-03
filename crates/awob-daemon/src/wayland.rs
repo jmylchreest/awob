@@ -633,7 +633,7 @@ impl State {
         {
             Ok(p) => p,
             Err(e) => {
-                eprintln!("awob-daemon: render: {e}");
+                tracing::warn!("render: {e}");
                 return;
             }
         };
@@ -646,7 +646,7 @@ impl State {
         let (buffer, canvas) = match buffer_result {
             Ok((b, c)) => (b, c),
             Err(e) => {
-                eprintln!("awob-daemon: shm buffer alloc failed: {e}");
+                tracing::warn!("shm buffer alloc failed: {e}");
                 return;
             }
         };
@@ -654,7 +654,7 @@ impl State {
         let layer = self.layer.as_ref().unwrap();
         let wl_surface = layer.wl_surface();
         if let Err(e) = buffer.attach_to(wl_surface) {
-            eprintln!("awob-daemon: attach buffer failed: {e}");
+            tracing::warn!("attach buffer failed: {e}");
             return;
         }
         wl_surface.damage_buffer(0, 0, width, height);

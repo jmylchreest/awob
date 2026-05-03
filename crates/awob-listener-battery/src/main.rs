@@ -73,10 +73,7 @@ struct Cli {
     /// kernel's charge-threshold gate is in effect) is captured by
     /// the cache but doesn't fire by default. Pass `--states all`
     /// to surface every state change.
-    #[arg(
-        long,
-        default_value = "charging,discharging,empty,fully-charged"
-    )]
+    #[arg(long, default_value = "charging,discharging,empty,fully-charged")]
     states: String,
 }
 
@@ -163,7 +160,7 @@ fn parse_state_filter(arg: &str) -> HashSet<BatteryState> {
         if let Some(s) = BatteryState::parse_slug(t) {
             out.insert(s);
         } else {
-            tracing::info!("awob-listener-battery: unknown state `{t}` in --states");
+            tracing::info!("unknown state `{t}` in --states");
         }
     }
     out
@@ -317,17 +314,11 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         .map(|s| format!("battery-{s}"))
         .unwrap_or_else(|| "battery".into());
     let state_filter = parse_state_filter(&cli.states);
-    eprintln!(
-        "awob-listener-battery: source={source} states={} (sysfs + udev)",
-        cli.states
-    );
+    tracing::info!("source={source} states={} (sysfs + udev)", cli.states);
 
     let batteries = discover_batteries();
     if batteries.is_empty() {
-        eprintln!(
-            "awob-listener-battery: no batteries under {SYSFS_ROOT} \
-             (type=Battery); nothing to watch"
-        );
+        tracing::info!("no batteries under {SYSFS_ROOT} (type=Battery); nothing to watch");
         return Ok(());
     }
     for b in &batteries {
@@ -412,7 +403,8 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         // on hardware whose battery driver doesn't fire its own uevent
         // promptly after AC plug. Battery events update the cache
         // first (above), so this is a redundant write for those.
-        let need_sysfs_refresh = !got_battery_event && (got_event || still_in_burst || due_for_rescan);
+        let need_sysfs_refresh =
+            !got_battery_event && (got_event || still_in_burst || due_for_rescan);
         if need_sysfs_refresh {
             for path in &batteries {
                 if let Some(r) = read_battery(path) {
@@ -427,7 +419,14 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         }
 
         if got_event || still_in_burst || due_for_rescan {
-            refresh_and_send(&cache, &cli.socket, &source, &state_filter, &mut last, false);
+            refresh_and_send(
+                &cache,
+                &cli.socket,
+                &source,
+                &state_filter,
+                &mut last,
+                false,
+            );
             last_rescan = now;
         }
         if !still_in_burst {
@@ -474,9 +473,8 @@ fn update_cache_from_event(
     cache.insert(
         name,
         BatteryReading {
-            capacity: capacity.unwrap_or_else(|| {
-                cache.values().next().map(|r| r.capacity).unwrap_or(0.0)
-            }),
+            capacity: capacity
+                .unwrap_or_else(|| cache.values().next().map(|r| r.capacity).unwrap_or(0.0)),
             state: status,
             weight,
         },
@@ -513,18 +511,21 @@ fn refresh_and_send(
     }
     *last = Some((state, pct_int));
     if let Err(e) = fire(socket, source, pct, state) {
-        tracing::info!("awob-listener-battery: send: {e}");
+        tracing::info!("send: {e}");
     }
 }
 
 fn main() -> ExitCode {
     awob_client::init_tracing("info");
-    tracing::info!(version = env!("CARGO_PKG_VERSION"), "awob-listener-battery starting");
+    tracing::info!(
+        version = env!("CARGO_PKG_VERSION"),
+        "awob-listener-battery starting"
+    );
     let cli = Cli::parse();
     match run(cli) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            tracing::info!("awob-listener-battery: {e}");
+            tracing::info!("{e}");
             ExitCode::from(1)
         }
     }
@@ -538,10 +539,19 @@ mod tests {
     fn icon_buckets() {
         assert_eq!(pick_icon(95.0, BatteryState::Discharging), "battery-full");
         assert_eq!(pick_icon(60.0, BatteryState::Discharging), "battery-good");
-        assert_eq!(pick_icon(20.0, BatteryState::Discharging), "battery-caution");
+        assert_eq!(
+            pick_icon(20.0, BatteryState::Discharging),
+            "battery-caution"
+        );
         assert_eq!(pick_icon(5.0, BatteryState::Discharging), "battery-empty");
-        assert_eq!(pick_icon(95.0, BatteryState::Charging), "battery-full-charged");
-        assert_eq!(pick_icon(60.0, BatteryState::Charging), "battery-good-charging");
+        assert_eq!(
+            pick_icon(95.0, BatteryState::Charging),
+            "battery-full-charged"
+        );
+        assert_eq!(
+            pick_icon(60.0, BatteryState::Charging),
+            "battery-good-charging"
+        );
     }
 
     #[test]
@@ -570,8 +580,16 @@ mod tests {
         // A 80-Wh battery at 50% + a 20-Wh battery at 90% should
         // weight toward 50% (the bigger one), not the simple mean.
         let r = vec![
-            BatteryReading { capacity: 50.0, state: BatteryState::Discharging, weight: 80.0 },
-            BatteryReading { capacity: 90.0, state: BatteryState::FullyCharged, weight: 20.0 },
+            BatteryReading {
+                capacity: 50.0,
+                state: BatteryState::Discharging,
+                weight: 80.0,
+            },
+            BatteryReading {
+                capacity: 90.0,
+                state: BatteryState::FullyCharged,
+                weight: 20.0,
+            },
         ];
         let (pct, state) = aggregate(&r).unwrap();
         // (50*80 + 90*20)/100 = 58
@@ -583,9 +601,15 @@ mod tests {
     #[test]
     fn from_sysfs_strings() {
         assert_eq!(BatteryState::from_sysfs("Charging"), BatteryState::Charging);
-        assert_eq!(BatteryState::from_sysfs("Discharging"), BatteryState::Discharging);
+        assert_eq!(
+            BatteryState::from_sysfs("Discharging"),
+            BatteryState::Discharging
+        );
         assert_eq!(BatteryState::from_sysfs("Full"), BatteryState::FullyCharged);
-        assert_eq!(BatteryState::from_sysfs("Not charging"), BatteryState::PendingDischarge);
+        assert_eq!(
+            BatteryState::from_sysfs("Not charging"),
+            BatteryState::PendingDischarge
+        );
         assert_eq!(BatteryState::from_sysfs("Empty"), BatteryState::Empty);
         assert_eq!(BatteryState::from_sysfs("nonsense"), BatteryState::Unknown);
     }

@@ -34,12 +34,19 @@ build-release:
 test:
     cargo test --workspace --locked
 
-# Clippy + rustfmt check. Plain clippy (no -D warnings gate) — see
-# `.github/workflows/ci.yml` for the rationale; lints are informational
-# until the workspace is fully clippy-clean.
+# Clippy + rustfmt check. Gates on warnings — workspace is
+# clippy-clean as of the lint pass that produced the FUTURES retire.
 lint:
     cargo fmt --all -- --check
-    cargo clippy --workspace --all-targets --locked
+    cargo clippy --workspace --all-targets --locked -- -D warnings
+
+# Install repo-managed git hooks (pre-commit runs `cargo fmt --check`).
+# Wires `core.hooksPath` to `scripts/git-hooks/`, so the hooks live in
+# version control and contributors get them automatically once they run
+# `just install-hooks` after cloning.
+install-hooks:
+    git config core.hooksPath scripts/git-hooks
+    @echo "git hooks: scripts/git-hooks (run \`git config --unset core.hooksPath\` to opt out)"
 
 # Clippy with --fix + format. Wipes uncommitted changes if you don't
 # stage first — guard your work.

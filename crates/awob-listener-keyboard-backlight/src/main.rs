@@ -126,9 +126,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or_else(|| sanitise_device(&device_name));
     let label = friendly_label(&dir, cli.label.as_ref());
 
-    eprintln!(
-        "awob-listener-keyboard-backlight: device={device_name} source={source} label={label:?}"
-    );
+    tracing::info!("device={device_name} source={source} label={label:?}");
 
     let max = read_u32(&max_path).unwrap_or(100) as f64;
     let initial = read_u32(&brightness_path).unwrap_or(0) as f64;
@@ -187,12 +185,15 @@ fn send_to_daemon(
 
 fn main() -> ExitCode {
     awob_client::init_tracing("info");
-    tracing::info!(version = env!("CARGO_PKG_VERSION"), "awob-listener-keyboard-backlight starting");
+    tracing::info!(
+        version = env!("CARGO_PKG_VERSION"),
+        "awob-listener-keyboard-backlight starting"
+    );
     let cli = Cli::parse();
     match run(cli) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            tracing::info!("awob-listener-keyboard-backlight: {e}");
+            tracing::info!("{e}");
             ExitCode::from(1)
         }
     }

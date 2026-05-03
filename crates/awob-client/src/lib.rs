@@ -27,8 +27,8 @@ pub use awob_protocol::{HistoryEntry, PROTOCOL_VERSION, Request, Response, SendP
 /// summaries.
 pub fn init_tracing(default_directives: &str) {
     use tracing_subscriber::{EnvFilter, fmt};
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new(default_directives));
+    let filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_directives));
     let _ = fmt()
         .with_env_filter(filter)
         .with_target(true)

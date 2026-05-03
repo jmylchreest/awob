@@ -26,7 +26,12 @@ pre-release-commit-message = "chore: release v{{version}}"
 sign-commit = true
 sign-tag = true
 
-# Belt-and-braces: tests must pass before any release. (Pre-1.0,
-# clippy is informational — release gate is the test suite + the
-# CI workflow. Tighten to clippy-clean before 0.1.0.)
-pre-release-hook = ["cargo", "test", "--workspace", "--locked"]
+# Belt-and-braces: fmt + clippy + tests must all pass before a release.
+# Workspace is clippy-clean and the CI workflow gates the same set,
+# so this catches the rare local-only release path.
+pre-release-hook = [
+    "bash", "-c",
+    "cargo fmt --all -- --check && \
+     cargo clippy --workspace --all-targets --locked -- -D warnings && \
+     cargo test --workspace --locked",
+]

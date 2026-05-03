@@ -97,15 +97,12 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         Some(l) => l,
         None => derive_label(&device_name, connector.as_deref()),
     };
-    eprintln!(
-        "awob-listener-backlight: device={device_name} source={source} \
+    tracing::info!(
+        "device={device_name} source={source} \
          connector={connector:?} label={label:?}"
     );
 
-    eprintln!(
-        "awob-listener-backlight: device={} source={}",
-        device_name, source
-    );
+    tracing::info!("device={} source={}", device_name, source);
 
     let max = read_u32(&max_path).unwrap_or(100) as f64;
     let initial = read_u32(&brightness_path).unwrap_or(0) as f64;
@@ -234,12 +231,15 @@ fn sanitise_device(name: &str) -> String {
 
 fn main() -> ExitCode {
     awob_client::init_tracing("info");
-    tracing::info!(version = env!("CARGO_PKG_VERSION"), "awob-listener-backlight starting");
+    tracing::info!(
+        version = env!("CARGO_PKG_VERSION"),
+        "awob-listener-backlight starting"
+    );
     let cli = Cli::parse();
     match run(cli) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            tracing::info!("awob-listener-backlight: {e}");
+            tracing::info!("{e}");
             ExitCode::from(1)
         }
     }

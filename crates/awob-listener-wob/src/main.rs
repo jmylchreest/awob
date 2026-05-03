@@ -86,18 +86,18 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         .or_else(default_fifo_path)
         .ok_or("XDG_RUNTIME_DIR not set; pass --fifo")?;
     ensure_fifo(&fifo)?;
-    tracing::info!("awob-listener-wob: fifo={}", fifo.display());
+    tracing::info!("fifo={}", fifo.display());
 
     let source = cli
         .source
         .unwrap_or_else(|| format!("wob-fifo-{}", std::process::id()));
-    tracing::info!("awob-listener-wob: source={source}");
+    tracing::info!("source={source}");
 
     loop {
         let f = match std::fs::OpenOptions::new().read(true).open(&fifo) {
             Ok(f) => f,
             Err(e) => {
-                tracing::info!("awob-listener-wob: open fifo: {e}");
+                tracing::info!("open fifo: {e}");
                 std::thread::sleep(Duration::from_millis(500));
                 continue;
             }
@@ -118,7 +118,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 continue;
             }
             let Some((value, max, style)) = parse_line(trimmed) else {
-                tracing::info!("awob-listener-wob: bad line `{trimmed}`");
+                tracing::info!("bad line `{trimmed}`");
                 continue;
             };
             let mut s = Send::new(&cli.event, value)
@@ -158,12 +158,15 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
 
 fn main() -> ExitCode {
     awob_client::init_tracing("info");
-    tracing::info!(version = env!("CARGO_PKG_VERSION"), "awob-listener-wob starting");
+    tracing::info!(
+        version = env!("CARGO_PKG_VERSION"),
+        "awob-listener-wob starting"
+    );
     let cli = Cli::parse();
     match run(cli) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            tracing::info!("awob-listener-wob: {e}");
+            tracing::info!("{e}");
             ExitCode::from(1)
         }
     }

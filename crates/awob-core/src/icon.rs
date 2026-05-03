@@ -1,12 +1,14 @@
 //! Icon resolution + rasterisation.
 //!
-//! Resolves a value passed as an element's `src` attribute through:
-//! 1. `data:image/svg+xml,...` or `data:image/png;base64,...` inline data,
-//! 2. an absolute path (`.svg` / `.png`),
-//! 3. a freedesktop icon name resolved via:
-//!    a) the active theme's `icons/` directory (passed in via [`IconResolver::with_theme_dir`]),
-//!    b) the system freedesktop icon themes (Adwaita, hicolor) via
-//!       the `freedesktop-icons` crate.
+//! Resolves a value passed as an element's `src` attribute through, in
+//! order:
+//!
+//! 1. `data:image/svg+xml,...` or `data:image/png;base64,...` inline data.
+//! 2. An absolute path (`.svg` / `.png`).
+//! 3. A freedesktop icon name. Looked up first in the active theme's
+//!    `icons/` directory (passed via [`IconResolver::with_theme_dir`]),
+//!    then in the system freedesktop icon themes (Adwaita, hicolor) via
+//!    the `freedesktop-icons` crate.
 //!
 //! Cached rasterisations are keyed by `(input, target_w, target_h)` and
 //! evicted opportunistically (LRU 64).

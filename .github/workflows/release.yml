@@ -79,7 +79,7 @@ jobs:
         with:
           shared-key: release
       - run: cargo fmt --all -- --check
-      - run: cargo clippy --workspace --all-targets --locked
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked
 
   build:

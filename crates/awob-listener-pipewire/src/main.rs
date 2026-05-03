@@ -106,6 +106,10 @@ pub struct AudioState {
     pub muted: bool,
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "OSD send-site naturally takes value/state/labels/icon — folding into a struct hurts call-site readability"
+)]
 pub fn fire(
     socket: &Option<PathBuf>,
     source: &str,
@@ -320,7 +324,7 @@ fn spawn_io_worker(
                     &ev.app,
                     ev.icon_override.as_deref(),
                 ) {
-                    tracing::info!("awob-listener-pipewire: send failed: {e}");
+                    tracing::info!("send failed: {e}");
                 }
             }
         })
@@ -370,10 +374,10 @@ fn parse_props_pod(pod: &libspa::pod::Pod) -> Option<AudioState> {
             }
             // SPA_PROP_channelVolumes
             0x10008 => {
-                if let libspa::pod::Value::ValueArray(arr) = &prop.value {
-                    if let libspa::pod::ValueArray::Float(vs) = arr {
-                        channel_volumes = vs.clone();
-                    }
+                if let libspa::pod::Value::ValueArray(libspa::pod::ValueArray::Float(vs)) =
+                    &prop.value
+                {
+                    channel_volumes = vs.clone();
                 }
             }
             _ => {}
@@ -405,8 +409,8 @@ fn parse_props_pod(pod: &libspa::pod::Pod) -> Option<AudioState> {
 }
 
 fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
-    eprintln!(
-        "awob-listener-pipewire: native pipewire-rs subscription \
+    tracing::info!(
+        "native pipewire-rs subscription \
          (per-node listener_id + source hash; one logical listener per Audio node)"
     );
 
@@ -527,12 +531,15 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
 
 fn main() -> ExitCode {
     awob_client::init_tracing("info");
-    tracing::info!(version = env!("CARGO_PKG_VERSION"), "awob-listener-pipewire starting");
+    tracing::info!(
+        version = env!("CARGO_PKG_VERSION"),
+        "awob-listener-pipewire starting"
+    );
     let cli = Cli::parse();
     match run(cli) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            tracing::info!("awob-listener-pipewire: {e}");
+            tracing::info!("{e}");
             ExitCode::from(1)
         }
     }

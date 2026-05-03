@@ -101,7 +101,7 @@ impl Dispatch<wl_registry::WlRegistry, ()> for ProbeState {
                 // Bind v4 if the compositor offers it; v4 added the `name`
                 // event which is exactly what we want. Older versions still
                 // populate make/model via the `geometry` event.
-                let bound_v = version.min(4).max(1);
+                let bound_v = version.clamp(1, 4);
                 let output = registry.bind::<wl_output::WlOutput, _, _>(name, bound_v, qh, ());
                 let id = output.id().protocol_id();
                 state.in_progress.insert(id, OutputInfo::default());

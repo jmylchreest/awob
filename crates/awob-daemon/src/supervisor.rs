@@ -91,7 +91,7 @@ impl Supervisor {
                     RestartPolicy::OnFailure => !success,
                     RestartPolicy::Never => false,
                 };
-                eprintln!(
+                tracing::info!(
                     "supervisor[{name}]: exited {} restart={policy:?} -> {}",
                     if success {
                         "cleanly".into()

@@ -5,6 +5,50 @@ describes the ask, what would need to change, and an estimate of effort so
 you can prioritise.
 
 
+## Time-driven element animations (pulse / glow / sparkle)
+
+Today's renderer is "draw once on send, fade-in / fade-out the whole
+surface, tween the bar value". Cute extras like a *pulsing critical
+glow* (alpha sin-wave on the bar/border when value is in the critical
+band), a *breathing icon*, or *sparkle particles* on overflow aren't
+expressible because:
+
+* No per-element clock — the renderer has `transitionProgress` (0→1
+  during the value tween) and the global fade alpha, but nothing that
+  ticks across the `show` window.
+* No animation primitives in the scene KDL — only static styles plus
+  `transition="..."`.
+* No frame loop during the `show` phase — the wayland surface only
+  redraws on send, retheme, fade-in, fade-out, and value-tween steps.
+
+What it would take, in increasing scope:
+
+1. **`pulse` flag on the critical style (~80 LOC)**: bool attribute on
+   any element that, when true, modulates alpha by `sin(t * 2πf)`
+   during the `show` window. Wayland surface schedules a `wl_surface
+   .frame()` callback while any pulsing element is visible. Cheap
+   quick-win for "critical battery flashes". Specifying `pulse-rate
+   ="1Hz"` and `pulse-depth="40%"` gives some control without inventing
+   a DSL.
+2. **`@animate` micro-DSL (~250 LOC)**: scene-level
+   `animate name=alpha from=0.6 to=1.0 duration="800ms" loop="ping-pong"`
+   block scoped to an element. Cover alpha + scale + colour-lerp; that
+   covers pulse, breathing, glow expansion. Renderer evaluates the
+   curve at `t = elapsed_show_ms` per-frame.
+3. **Particle effects (~600 LOC + dep)**: sparkles on overflow, motion
+   trails on rapid value change. Would want a tiny particle system
+   (positions, velocities, life, colour-fade) layered after the bar.
+   Real cost is design (which effects feel right, perf budget for
+   integrated GPUs) more than code.
+
+Plus a **demo script** (`demo/animations.sh`): cycles through pulse →
+glow → sparkle → spinner with explanatory `--app` labels and `--show
+3000` so each plays long enough to appreciate.
+
+Defer until at least (1) is wanted; (2) and (3) are speculative until
+someone uses (1) and asks for more.
+
+
 ## Structured logging via `tracing`
 
 Today every binary uses `eprintln!` for diagnostics: daemon
@@ -102,26 +146,52 @@ Cost: ~30 min per listener. Defer until consistency review or new
 contributor onboarding wants the simpler mental model.
 
 
+## Bluetooth peripheral batteries (`awob-listener-bluetooth`)
+
+The current `awob-listener-battery` reads `/sys/class/power_supply/*` of
+`type=Battery`, which on Linux means built-in laptop batteries. Bluetooth
+peripherals (keyboards, mice, headphones, controllers) end up in three
+different places depending on kernel and connection profile:
+
+* **Linux 5.13+ HID-over-BT/USB**: `/sys/class/power_supply/hid-XX:XX:
+  XX:XX:XX:XX-battery/` with `type=Battery`. Already covered by the
+  current listener — if the kernel exposes it, we read it.
+* **BlueZ 5.48+**: every connected device with the BAS GATT
+  characteristic (0x2A19) gets `org.bluez.Battery1` on its D-Bus object,
+  with `Percentage` (0–100) plus `PropertiesChanged` signals on
+  state change. **Not** mirrored into sysfs for non-HID profiles
+  (notably A2DP-only headphones).
+* **UPower**: queries BlueZ over D-Bus and surfaces each peripheral as
+  its own `org.freedesktop.UPower.Device` (kind: `keyboard`/`mouse`/
+  `headphones`). Same data as BlueZ, one extra hop.
+
+What's missing today: A2DP headphones and older kernels won't surface in
+sysfs and so won't fire OSDs.
+
+A new `awob-listener-bluetooth` crate would:
+
+1. Connect to the system bus (zbus) and watch
+   `org.bluez` ObjectManager for `org.bluez.Battery1` interface
+   add / remove (so hot plug/unplug Just Works).
+2. For each device, subscribe to `PropertiesChanged` on `Percentage`.
+3. Emit one OSD per device with `source=bluetooth-<mac>` and
+   `app=<device-friendly-name>` so each peripheral gets its own OSD
+   with its own label.
+4. Fire only on capacity *change* (not every property update) and only
+   when the device is `Connected=true`, mirroring the spirit of the
+   sysfs listener's state filter.
+
+Cost: ~150 LOC + zbus dep (which we deliberately removed from
+`awob-listener-battery`). One listener per host, not per device — the
+crate fans out internally. Defer until a user with BT headphones / a
+peripheral-heavy desk asks.
+
+
 ## Clippy-clean workspace
 
-The CI clippy gate is informational pre-1.0 — `cargo clippy --workspace
---all-targets` runs but doesn't fail the build. The workspace currently
-trips on a small set of legitimate-but-noisy lints:
-
-* `clippy::too_many_arguments` on the wayland render entry-point
-  (8 args carrying theme + bindings + value + transition + dir +
-  source + event + preempt). Could be folded into a struct; pre-1.0
-  the explicit signature is more readable.
-* `clippy::missing_safety_doc` on the FFI crate's raw-pointer
-  functions (which *are* `unsafe` — clippy wants doc comments).
-* Minor stylistic ones — `clamp`-able patterns, indexing loops,
-  field-after-default-init — in the listener binaries.
-
-Path to clippy-clean: address each lint with the smallest viable fix
-(usually `#[allow(...)]` with a `// reason: …` line, occasionally
-a small refactor), then flip CI back to `-D warnings` and add a
-clippy-clean pre-release-hook in `release.toml`. ~30 min of focused
-work; deferred so it doesn't churn the codebase mid-feature.
+Done. CI + release pipelines now gate on `cargo clippy --workspace
+--all-targets --locked -- -D warnings`; pre-commit runs `cargo fmt
+--check`. This entry retired.
 
 
 ## FFI: expose theme management + query

@@ -55,13 +55,17 @@ pub fn parse(s: &str) -> Option<ShadowSpec> {
     })
 }
 
+/// `(width, height, corner_radius, blur_radius)` → cached mask.
+type MaskKey = (u32, u32, u32, u32);
+/// `(mask_w, mask_h, alpha-bytes)`.
+type MaskEntry = (u32, u32, Vec<u8>);
+
 /// Cache of pre-blurred shadow masks. The renderer keeps one of these and
 /// hits it once per shadowed rect per render — empty cost on repeat
 /// renders of the same theme.
 #[derive(Default)]
 pub struct ShadowCache {
-    /// `(width, height, corner_radius, blur_radius)` → `(mask_w, mask_h, alpha)`
-    masks: HashMap<(u32, u32, u32, u32), (u32, u32, Vec<u8>)>,
+    masks: HashMap<MaskKey, MaskEntry>,
 }
 
 impl ShadowCache {
@@ -158,10 +162,10 @@ fn build_kernel(sigma: f32) -> Vec<f32> {
     let size = (radius * 2 + 1) as usize;
     let mut k = vec![0.0_f32; size];
     let mut sum = 0.0;
-    for i in 0..size {
+    for (i, slot) in k.iter_mut().enumerate() {
         let x = (i as i32 - radius) as f32;
         let v = (-(x * x) / (2.0 * sigma * sigma)).exp();
-        k[i] = v;
+        *slot = v;
         sum += v;
     }
     for v in &mut k {

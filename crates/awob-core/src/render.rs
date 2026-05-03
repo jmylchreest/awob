@@ -631,8 +631,10 @@ fn stroke_rounded_rect(pm: &mut Pixmap, bb: Box2, radius: f32, width: f32, colou
     let mut paint = Paint::default();
     paint.set_color_rgba8(colour.r, colour.g, colour.b, colour.a);
     paint.anti_alias = true;
-    let mut stroke = tiny_skia::Stroke::default();
-    stroke.width = width;
+    let stroke = tiny_skia::Stroke {
+        width,
+        ..Default::default()
+    };
     if let Some(p) = rounded_rect_path(bb, radius) {
         pm.stroke_path(&p, &paint, &stroke, Transform::identity(), None);
     }

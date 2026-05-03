@@ -79,12 +79,8 @@ jobs:
         with:
           shared-key: ci
 
-      # Run clippy as informational; the workspace has a number of
-      # legitimate clippy disagreements (FFI raw-pointer functions,
-      # the wayland render entry-point's argument count) that we'd
-      # silence with `#[allow(...)]` if we wanted to gate. Pre-1.0:
-      # report-only, gate later. Tracked in FUTURES.md.
-      - run: cargo clippy --workspace --all-targets --locked
+      # Workspace is clippy-clean — gate on warnings.
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
   fmt:
     name: cargo fmt --check

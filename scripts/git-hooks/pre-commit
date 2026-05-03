@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+#
+# awob pre-commit hook.
+#
+# Runs `cargo fmt --check` against the workspace so a commit can't
+# introduce a formatting drift that CI would reject. Fast (<1s on
+# warm cache) and offline.
+#
+# Install via `just install-hooks` (which sets `core.hooksPath` to
+# `scripts/git-hooks`). Skip on a per-commit basis with
+# `git commit --no-verify` — but please don't make a habit of it.
+
+set -euo pipefail
+
+# Allow merges, reverts, and CI rebases to bypass — formatting is the
+# author's responsibility, not the merger's.
+if [[ -f .git/MERGE_HEAD ]] || [[ -f .git/CHERRY_PICK_HEAD ]]; then
+    exit 0
+fi
+
+if ! command -v cargo >/dev/null 2>&1; then
+    echo "pre-commit: cargo not found on PATH; skipping fmt check" >&2
+    exit 0
+fi
+
+if ! cargo fmt --all -- --check; then
+    echo
+    echo "pre-commit: cargo fmt found unformatted code." >&2
+    echo "  fix with: cargo fmt --all" >&2
+    echo "  or skip with: git commit --no-verify" >&2
+    exit 1
+fi

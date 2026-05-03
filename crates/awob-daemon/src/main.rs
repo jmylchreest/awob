@@ -106,8 +106,8 @@ impl Shared {
                         payload.max,
                     );
                     if let Some(dup) = outcome.duplicate_listener {
-                        eprintln!(
-                            "warning: duplicate listener `{}` — multiple instances active: [{}]",
+                        tracing::warn!(
+                            "duplicate listener `{}` — multiple instances active: [{}]",
                             dup.listener_id,
                             dup.sources.join(", "),
                         );
@@ -197,10 +197,7 @@ impl Shared {
                         // a currently-visible OSD redraws with it
                         // instead of waiting for the next send.
                         if let Some(handle) = &self.surface {
-                            handle.retheme(
-                                self.theme.theme.clone(),
-                                self.theme.source_dir.clone(),
-                            );
+                            handle.retheme(self.theme.theme.clone(), self.theme.source_dir.clone());
                         }
                         if persist {
                             if let Some(path) = &self.config_path {
@@ -240,10 +237,7 @@ impl Shared {
                         self.theme = t;
                         self.rewatch();
                         if let Some(handle) = &self.surface {
-                            handle.retheme(
-                                self.theme.theme.clone(),
-                                self.theme.source_dir.clone(),
-                            );
+                            handle.retheme(self.theme.theme.clone(), self.theme.source_dir.clone());
                         }
                         Response::Ok
                     }
@@ -271,10 +265,7 @@ impl Shared {
                         self.theme = t;
                         self.rewatch();
                         if let Some(handle) = &self.surface {
-                            handle.retheme(
-                                self.theme.theme.clone(),
-                                self.theme.source_dir.clone(),
-                            );
+                            handle.retheme(self.theme.theme.clone(), self.theme.source_dir.clone());
                         }
                         Response::Ok
                     }
@@ -388,7 +379,7 @@ fn build_effective_listeners(cfg: &config::AwobConfig) -> Vec<config::ListenerCo
         let Some(path) = known_listeners::resolve_binary(known.binary) else {
             continue;
         };
-        eprintln!(
+        tracing::info!(
             "supervisor: auto-discovered `{}` -> {}",
             known.name,
             path.display()
@@ -500,14 +491,14 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     ) {
         Ok(t) => t,
         Err(e) => {
-            eprintln!(
-                "warning: theme `{theme_name}` failed to load ({e}); \
+            tracing::warn!(
+                "theme `{theme_name}` failed to load ({e}); \
                  falling back to embedded default"
             );
             theme_loader::load_embedded()?
         }
     };
-    eprintln!(
+    tracing::info!(
         "theme: {} ({} elements)",
         initial.name,
         initial.theme.scene.elements.len()
@@ -572,7 +563,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     {
         let mut s = shared.lock().unwrap();
         s.rewatch();
-        eprintln!(
+        tracing::info!(
             "watching: {} paths for hot reload",
             s.theme.watch_paths().len()
         );
@@ -607,12 +598,9 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                         // colours / layout instantly. Idle surface
                         // ignores the message.
                         if let Some(handle) = &s.surface {
-                            handle.retheme(
-                                s.theme.theme.clone(),
-                                s.theme.source_dir.clone(),
-                            );
+                            handle.retheme(s.theme.theme.clone(), s.theme.source_dir.clone());
                         }
-                        eprintln!(
+                        tracing::info!(
                             "hot-reloaded theme `{name}` ({} watched files)",
                             s.theme.watch_paths().len()
                         );
@@ -689,9 +677,7 @@ fn main() -> ExitCode {
     // line. Default level: info. Quiet noisy framework logs
     // (smithay-client-toolkit, wayland-client, calloop) at warn so
     // info-level output stays focused on awob.
-    awob_client::init_tracing(
-        "info,smithay_client_toolkit=warn,wayland_client=warn,calloop=warn",
-    );
+    awob_client::init_tracing("info,smithay_client_toolkit=warn,wayland_client=warn,calloop=warn");
     tracing::info!(
         version = env!("CARGO_PKG_VERSION"),
         protocol = awob_protocol::PROTOCOL_VERSION,
