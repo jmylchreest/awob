@@ -72,14 +72,19 @@ impl Shared {
             Request::Hello { protocol } => Response::Hello {
                 protocol: PROTOCOL_VERSION,
                 daemon_version: env!("CARGO_PKG_VERSION").into(),
-            }.with_protocol_check(protocol),
+            }
+            .with_protocol_check(protocol),
             Request::Send(payload) => {
-                let prev = payload.source.as_deref()
+                let prev = payload
+                    .source
+                    .as_deref()
                     .and_then(|s| self.history.get(s, &payload.event))
                     .cloned();
                 let last_value = prev.as_ref().map(|e| e.last_value);
                 let last_max = prev.as_ref().map(|e| e.last_max);
-                let last_seen = prev.as_ref().map(|e| Instant::now().duration_since(e.last_seen));
+                let last_seen = prev
+                    .as_ref()
+                    .map(|e| Instant::now().duration_since(e.last_seen));
                 if let Some(src) = payload.source.as_deref() {
                     let outcome = self.history.record(
                         src,
@@ -96,7 +101,8 @@ impl Shared {
                         );
                     }
                 }
-                let mut bindings = awob_core::bindings::build(&payload, last_value, last_max, last_seen);
+                let mut bindings =
+                    awob_core::bindings::build(&payload, last_value, last_max, last_seen);
                 bindings.palette = self.theme.theme.palette.clone();
                 let style_to_apply = payload.style.as_deref().unwrap_or("normal");
                 let _ = apply_style(&self.theme.theme, &mut bindings, style_to_apply);
@@ -106,9 +112,15 @@ impl Shared {
                 let summary = format!(
                     "send: event={} value={} max={} src={:?} style={:?} app={:?} icon={:?} \
                      last_value={:?} last_max={:?}",
-                    payload.event, payload.value, payload.max,
-                    payload.source, payload.style, payload.app, payload.icon,
-                    last_value, last_max,
+                    payload.event,
+                    payload.value,
+                    payload.max,
+                    payload.source,
+                    payload.style,
+                    payload.app,
+                    payload.icon,
+                    last_value,
+                    last_max,
                 );
                 eprintln!("{summary}");
                 if let Some(handle) = &self.surface {
@@ -123,8 +135,14 @@ impl Shared {
                     let transition = theme.surface.transition;
                     let theme_dir = self.theme.source_dir.clone();
                     handle.render(
-                        theme, bindings, last_value_for_anim, transition, theme_dir,
-                        payload.source.clone(), payload.event.clone(), payload.preempt,
+                        theme,
+                        bindings,
+                        last_value_for_anim,
+                        transition,
+                        theme_dir,
+                        payload.source.clone(),
+                        payload.event.clone(),
+                        payload.preempt,
                     );
                 }
                 Response::Ok
@@ -137,7 +155,9 @@ impl Shared {
                 let mut entries = Vec::new();
                 for (src, _evt, e) in self.history.entries() {
                     if let Some(filter) = source.as_deref() {
-                        if src != filter { continue; }
+                        if src != filter {
+                            continue;
+                        }
                     }
                     entries.push(history_entry(src, e));
                 }
@@ -170,7 +190,9 @@ impl Shared {
                         }
                         Response::Ok
                     }
-                    Err(e) => Response::Error { message: format!("set theme: {e}") },
+                    Err(e) => Response::Error {
+                        message: format!("set theme: {e}"),
+                    },
                 }
             }
             Request::Reload => {
@@ -181,7 +203,9 @@ impl Shared {
                         self.rewatch();
                         Response::Ok
                     }
-                    Err(e) => Response::Error { message: format!("reload: {e}") },
+                    Err(e) => Response::Error {
+                        message: format!("reload: {e}"),
+                    },
                 }
             }
             Request::ThemeList => Response::ThemeList {
@@ -193,7 +217,6 @@ impl Shared {
             },
         }
     }
-
 }
 
 /// Walk `themes_root` and return one [`ThemeInfo`] per subdirectory
@@ -214,10 +237,16 @@ fn enumerate_themes(
         if let Ok(read) = std::fs::read_dir(root) {
             for entry in read.flatten() {
                 let dir = entry.path();
-                if !dir.is_dir() { continue; }
+                if !dir.is_dir() {
+                    continue;
+                }
                 let scene = dir.join("scene.kdl");
-                if !scene.exists() { continue; }
-                let Some(name) = dir.file_name().and_then(|s| s.to_str()) else { continue; };
+                if !scene.exists() {
+                    continue;
+                }
+                let Some(name) = dir.file_name().and_then(|s| s.to_str()) else {
+                    continue;
+                };
                 let description = read_manifest_description(&dir.join("manifest.toml"));
                 out.push(ThemeInfo {
                     name: name.to_string(),
@@ -231,7 +260,10 @@ fn enumerate_themes(
     // Always surface the embedded default. If the on-disk version
     // shadows it (same name), keep the disk entry — the daemon
     // would load that one anyway.
-    if !out.iter().any(|t| t.name == theme_loader::EMBEDDED_DEFAULT_NAME) {
+    if !out
+        .iter()
+        .any(|t| t.name == theme_loader::EMBEDDED_DEFAULT_NAME)
+    {
         out.push(ThemeInfo {
             name: theme_loader::EMBEDDED_DEFAULT_NAME.into(),
             active: theme_loader::EMBEDDED_DEFAULT_NAME == active_name,
@@ -253,7 +285,11 @@ fn read_manifest_description(path: &Path) -> Option<String> {
     let raw = std::fs::read_to_string(path).ok()?;
     let parsed: toml::Value = toml::from_str(&raw).ok()?;
     let s = parsed.get("description")?.as_str()?.trim();
-    if s.is_empty() { None } else { Some(s.to_string()) }
+    if s.is_empty() {
+        None
+    } else {
+        Some(s.to_string())
+    }
 }
 
 /// Combine explicit `[[listeners]]` with auto-discovered known listeners
@@ -271,14 +307,19 @@ fn build_effective_listeners(cfg: &config::AwobConfig) -> Vec<config::ListenerCo
     let disabled: std::collections::HashSet<&str> =
         cfg.supervisor.disable.iter().map(|s| s.as_str()).collect();
     for known in known_listeners::KNOWN_LISTENERS {
-        if explicit_names.contains(known.name) { continue; }
-        if disabled.contains(known.name) { continue; }
+        if explicit_names.contains(known.name) {
+            continue;
+        }
+        if disabled.contains(known.name) {
+            continue;
+        }
         let Some(path) = known_listeners::resolve_binary(known.binary) else {
             continue;
         };
         eprintln!(
             "supervisor: auto-discovered `{}` -> {}",
-            known.name, path.display()
+            known.name,
+            path.display()
         );
         out.push(config::ListenerConfig {
             name: known.name.into(),
@@ -338,7 +379,6 @@ fn default_themes_dir() -> Option<PathBuf> {
     awob_core::paths::awob_themes_dir()
 }
 
-
 fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     // Load config file (explicit path > XDG default > none).
     let file_config: config::AwobConfig = match &cli.config {
@@ -347,12 +387,20 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     };
 
     // CLI flags override file values.
-    let theme_name = cli.theme.clone()
+    let theme_name = cli
+        .theme
+        .clone()
         .or(file_config.theme.clone())
         .unwrap_or_else(|| theme_loader::EMBEDDED_DEFAULT_NAME.into());
-    let themes_root = cli.themes_dir.clone()
-        .or_else(|| file_config.themes_dir.as_deref()
-            .map(awob_core::paths::expand_config_path))
+    let themes_root = cli
+        .themes_dir
+        .clone()
+        .or_else(|| {
+            file_config
+                .themes_dir
+                .as_deref()
+                .map(awob_core::paths::expand_config_path)
+        })
         .or_else(default_themes_dir);
 
     // Cold-start fallback: if the configured theme can't be loaded (missing
@@ -370,7 +418,11 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             theme_loader::load_embedded()?
         }
     };
-    eprintln!("theme: {} ({} elements)", initial.name, initial.theme.scene.elements.len());
+    eprintln!(
+        "theme: {} ({} elements)",
+        initial.name,
+        initial.theme.scene.elements.len()
+    );
 
     let socket_path = match cli.socket {
         Some(p) => p,
@@ -403,7 +455,10 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     let (reload_tx, reload_rx) = std::sync::mpsc::channel::<()>();
     let watcher = match watcher::ThemeWatcher::new(reload_tx.clone()) {
         Ok(w) => Some(w),
-        Err(e) => { eprintln!("warning: file watcher disabled: {e}"); None }
+        Err(e) => {
+            eprintln!("warning: file watcher disabled: {e}");
+            None
+        }
     };
 
     // Resolve the awob.toml path the daemon should rewrite when a client
@@ -411,7 +466,9 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     // otherwise the XDG default. No fallback to a synthetic path — if we
     // genuinely don't know where to write, persist requests get a clear
     // error rather than dumping a file somewhere unexpected.
-    let config_path: Option<PathBuf> = cli.config.clone()
+    let config_path: Option<PathBuf> = cli
+        .config
+        .clone()
         .or_else(awob_core::paths::awob_config_file);
 
     let shared = Arc::new(Mutex::new(Shared {
@@ -425,7 +482,10 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     {
         let mut s = shared.lock().unwrap();
         s.rewatch();
-        eprintln!("watching: {} paths for hot reload", s.theme.watch_paths().len());
+        eprintln!(
+            "watching: {} paths for hot reload",
+            s.theme.watch_paths().len()
+        );
     }
 
     // Hot-reload worker.
@@ -437,8 +497,12 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 // next 80ms. Editors and IDEs commonly emit 3-5 modify
                 // events per save.
                 let deadline = std::time::Instant::now() + std::time::Duration::from_millis(80);
-                while let Some(remaining) = deadline.checked_duration_since(std::time::Instant::now()) {
-                    if reload_rx.recv_timeout(remaining).is_err() { break; }
+                while let Some(remaining) =
+                    deadline.checked_duration_since(std::time::Instant::now())
+                {
+                    if reload_rx.recv_timeout(remaining).is_err() {
+                        break;
+                    }
                 }
                 let mut s = shared.lock().unwrap();
                 let name = s.theme.name.clone();
@@ -447,8 +511,10 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                     Ok(t) => {
                         s.theme = t;
                         s.rewatch();
-                        eprintln!("hot-reloaded theme `{name}` ({} watched files)",
-                                  s.theme.watch_paths().len());
+                        eprintln!(
+                            "hot-reloaded theme `{name}` ({} watched files)",
+                            s.theme.watch_paths().len()
+                        );
                     }
                     Err(e) => eprintln!("hot reload failed: {e}"),
                 }
@@ -486,7 +552,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     {
         let sup = Arc::clone(&sup);
         thread::spawn(move || {
-            use nix::sys::signal::{Signal, SigSet};
+            use nix::sys::signal::{SigSet, Signal};
             let mut signals = SigSet::empty();
             signals.add(Signal::SIGINT);
             signals.add(Signal::SIGTERM);
@@ -502,13 +568,14 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     for incoming in listener.incoming() {
         let stream = match incoming {
             Ok(s) => s,
-            Err(e) => { eprintln!("accept: {e}"); continue; }
+            Err(e) => {
+                eprintln!("accept: {e}");
+                continue;
+            }
         };
         let shared = Arc::clone(&shared);
         thread::spawn(move || {
-            let _ = ipc::serve_connection(stream, move |req| {
-                shared.lock().unwrap().handle(req)
-            });
+            let _ = ipc::serve_connection(stream, move |req| shared.lock().unwrap().handle(req));
         });
     }
 
@@ -520,6 +587,9 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
     match run(cli) {
         Ok(()) => ExitCode::SUCCESS,
-        Err(e) => { eprintln!("awob-daemon: {e}"); ExitCode::from(1) }
+        Err(e) => {
+            eprintln!("awob-daemon: {e}");
+            ExitCode::from(1)
+        }
     }
 }

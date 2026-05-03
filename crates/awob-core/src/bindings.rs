@@ -30,7 +30,11 @@ impl Value {
     pub fn as_string(&self) -> String {
         match self {
             Value::Number(n) => {
-                if (n.fract()).abs() < 1e-9 { format!("{}", *n as i64) } else { format!("{n}") }
+                if (n.fract()).abs() < 1e-9 {
+                    format!("{}", *n as i64)
+                } else {
+                    format!("{n}")
+                }
             }
             Value::String(s) => s.clone(),
             Value::Colour(c) => c.to_string(),
@@ -47,7 +51,9 @@ impl Value {
             Value::Colour(_) => true,
         }
     }
-    pub fn is_null(&self) -> bool { matches!(self, Value::Null) }
+    pub fn is_null(&self) -> bool {
+        matches!(self, Value::Null)
+    }
 }
 
 /// Expression evaluation context.
@@ -63,7 +69,9 @@ pub struct Bindings {
 }
 
 impl Bindings {
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     pub fn set(&mut self, name: impl Into<String>, value: Value) {
         self.vars.insert(name.into(), value);
@@ -71,8 +79,12 @@ impl Bindings {
 
     /// Lookup a `$name` value, falling back to palette as a Colour.
     pub fn get(&self, name: &str) -> Value {
-        if let Some(v) = self.vars.get(name) { return v.clone(); }
-        if let Some(c) = self.palette.get(name) { return Value::Colour(*c); }
+        if let Some(v) = self.vars.get(name) {
+            return v.clone();
+        }
+        if let Some(c) = self.palette.get(name) {
+            return Value::Colour(*c);
+        }
         Value::Null
     }
 }
@@ -89,7 +101,11 @@ pub fn build(
     b.set("event", String(payload.event.clone()));
     b.set("value", Number(payload.value));
     b.set("max", Number(payload.max));
-    let progress = if payload.max > 0.0 { payload.value / payload.max } else { 0.0 };
+    let progress = if payload.max > 0.0 {
+        payload.value / payload.max
+    } else {
+        0.0
+    };
     b.set("progress", Number(progress));
 
     match last_value {
@@ -106,13 +122,21 @@ pub fn build(
         None => 0.0,
     };
     b.set("delta", Number(delta));
-    let direction = if last_value.is_none() { "flat" }
-        else if delta > 0.0 { "up" }
-        else if delta < 0.0 { "down" }
-        else { "flat" };
+    let direction = if last_value.is_none() {
+        "flat"
+    } else if delta > 0.0 {
+        "up"
+    } else if delta < 0.0 {
+        "down"
+    } else {
+        "flat"
+    };
     b.set("direction", String(direction.into()));
 
-    b.set("valueAge", Number(last_seen.map(|d| d.as_secs_f64()).unwrap_or(f64::INFINITY)));
+    b.set(
+        "valueAge",
+        Number(last_seen.map(|d| d.as_secs_f64()).unwrap_or(f64::INFINITY)),
+    );
 
     match &payload.app {
         Some(s) => b.set("app", String(s.clone())),

@@ -48,13 +48,18 @@ pub enum ThemeError {
     #[error("unknown top-level node: {0}")]
     UnknownTopLevel(String),
     #[error("import `{path}`: {source}")]
-    Import { path: String, source: std::io::Error },
+    Import {
+        path: String,
+        source: std::io::Error,
+    },
     #[error("circular import detected: {0}")]
     CircularImport(String),
 }
 
 impl From<kdl::KdlError> for ThemeError {
-    fn from(e: kdl::KdlError) -> Self { ThemeError::Kdl(e.to_string()) }
+    fn from(e: kdl::KdlError) -> Self {
+        ThemeError::Kdl(e.to_string())
+    }
 }
 
 /// Parse a theme that does NOT use `import` (no filesystem context required).
@@ -112,13 +117,17 @@ fn parse_into(
                     Some(d) => d.join(&rel),
                     None => PathBuf::from(&rel),
                 };
-                let abs = std::fs::canonicalize(&resolved)
-                    .map_err(|e| ThemeError::Import { path: resolved.display().to_string(), source: e })?;
+                let abs = std::fs::canonicalize(&resolved).map_err(|e| ThemeError::Import {
+                    path: resolved.display().to_string(),
+                    source: e,
+                })?;
                 if !seen.insert(abs.clone()) {
                     return Err(ThemeError::CircularImport(abs.display().to_string()));
                 }
-                let content = std::fs::read_to_string(&abs)
-                    .map_err(|e| ThemeError::Import { path: abs.display().to_string(), source: e })?;
+                let content = std::fs::read_to_string(&abs).map_err(|e| ThemeError::Import {
+                    path: abs.display().to_string(),
+                    source: e,
+                })?;
                 acc.imported_files.push(abs.clone());
                 let imported_base = abs.parent().map(|p| p.to_path_buf());
                 parse_into(&content, imported_base.as_deref(), seen, acc)?;
@@ -133,13 +142,25 @@ fn parse_into(
     Ok(())
 }
 
-fn parse_surface(n: &KdlNode, s: &mut Surface, warnings: &mut Vec<String>) -> Result<(), ThemeError> {
+fn parse_surface(
+    n: &KdlNode,
+    s: &mut Surface,
+    warnings: &mut Vec<String>,
+) -> Result<(), ThemeError> {
     if let Some(children) = n.children() {
         for child in children.nodes() {
             let name = child.name().value();
             match name {
-                "width" => if let Some(v) = node_int(child) { s.width = v as u32 },
-                "height" => if let Some(v) = node_int(child) { s.height = v as u32 },
+                "width" => {
+                    if let Some(v) = node_int(child) {
+                        s.width = v as u32
+                    }
+                }
+                "height" => {
+                    if let Some(v) = node_int(child) {
+                        s.height = v as u32
+                    }
+                }
                 "anchor" => {
                     if let Some(v) = node_string(child) {
                         s.anchor = Anchor::parse(&v)
@@ -147,12 +168,15 @@ fn parse_surface(n: &KdlNode, s: &mut Surface, warnings: &mut Vec<String>) -> Re
                     }
                 }
                 "offset" => {
-                    let xs: Vec<i64> = child.entries().iter()
+                    let xs: Vec<i64> = child
+                        .entries()
+                        .iter()
                         .filter_map(|e| match e.value() {
                             KdlValue::Integer(i) => Some(*i as i64),
                             KdlValue::Float(f) => Some(*f as i64),
                             _ => None,
-                        }).collect();
+                        })
+                        .collect();
                     if xs.len() == 2 {
                         let (x, y) = (xs[0], xs[1]);
                         let (he, ve) = s.anchor.edges();
@@ -186,9 +210,24 @@ fn parse_surface(n: &KdlNode, s: &mut Surface, warnings: &mut Vec<String>) -> Re
                         }
                     }
                     match pos.len() {
-                        1 => { m.top = pos[0]; m.right = pos[0]; m.bottom = pos[0]; m.left = pos[0]; }
-                        2 => { m.top = pos[0]; m.bottom = pos[0]; m.right = pos[1]; m.left = pos[1]; }
-                        4 => { m.top = pos[0]; m.right = pos[1]; m.bottom = pos[2]; m.left = pos[3]; }
+                        1 => {
+                            m.top = pos[0];
+                            m.right = pos[0];
+                            m.bottom = pos[0];
+                            m.left = pos[0];
+                        }
+                        2 => {
+                            m.top = pos[0];
+                            m.bottom = pos[0];
+                            m.right = pos[1];
+                            m.left = pos[1];
+                        }
+                        4 => {
+                            m.top = pos[0];
+                            m.right = pos[1];
+                            m.bottom = pos[2];
+                            m.left = pos[3];
+                        }
                         _ => {}
                     }
                     s.margin = m;
@@ -201,13 +240,19 @@ fn parse_surface(n: &KdlNode, s: &mut Surface, warnings: &mut Vec<String>) -> Re
                     }
                 }
                 "fade-in" | "fade_in" => {
-                    if let Some(ms) = parse_duration_ms(child) { s.fade_in = Duration::from_millis(ms); }
+                    if let Some(ms) = parse_duration_ms(child) {
+                        s.fade_in = Duration::from_millis(ms);
+                    }
                 }
                 "show" => {
-                    if let Some(ms) = parse_duration_ms(child) { s.show = Duration::from_millis(ms); }
+                    if let Some(ms) = parse_duration_ms(child) {
+                        s.show = Duration::from_millis(ms);
+                    }
                 }
                 "fade-out" | "fade_out" => {
-                    if let Some(ms) = parse_duration_ms(child) { s.fade_out = Duration::from_millis(ms); }
+                    if let Some(ms) = parse_duration_ms(child) {
+                        s.fade_out = Duration::from_millis(ms);
+                    }
                 }
                 "transition" | "value-transition" | "value_transition" => {
                     if let Some(ms) = parse_duration_ms(child) {
@@ -227,21 +272,31 @@ fn parse_palette(n: &KdlNode, p: &mut HashMap<String, Colour>) -> Result<(), The
             let name = child.name().value();
             let val = node_string(child)
                 .ok_or_else(|| ThemeError::Kdl(format!("palette `{name}` needs a string value")))?;
-            let colour = Colour::parse(&val).map_err(|e| ThemeError::Colour { name: name.into(), source: e })?;
+            let colour = Colour::parse(&val).map_err(|e| ThemeError::Colour {
+                name: name.into(),
+                source: e,
+            })?;
             p.insert(name.to_string(), colour);
         }
     }
     Ok(())
 }
 
-fn parse_styles(n: &KdlNode, styles: &mut Vec<Style>, warnings: &mut Vec<String>) -> Result<(), ThemeError> {
+fn parse_styles(
+    n: &KdlNode,
+    styles: &mut Vec<Style>,
+    warnings: &mut Vec<String>,
+) -> Result<(), ThemeError> {
     if let Some(children) = n.children() {
         for child in children.nodes() {
             if child.name().value() != "style" {
                 warnings.push(format!("unknown styles entry `{}`", child.name().value()));
                 continue;
             }
-            let name = child.entries().iter().find(|e| e.name().is_none())
+            let name = child
+                .entries()
+                .iter()
+                .find(|e| e.name().is_none())
                 .and_then(|e| e.value().as_string().map(|s| s.to_string()))
                 .ok_or_else(|| ThemeError::Kdl("style needs a name".into()))?;
             let mut overrides = Vec::new();
@@ -249,7 +304,8 @@ fn parse_styles(n: &KdlNode, styles: &mut Vec<Style>, warnings: &mut Vec<String>
                 if let Some(key) = e.name().map(|n| n.value().to_string()) {
                     let raw = entry_value_to_string(e);
                     let av = AttrValue::parse(raw).map_err(|err| ThemeError::Expr {
-                        at: format!("style `{name}`.`{key}`"), source: err,
+                        at: format!("style `{name}`.`{key}`"),
+                        source: err,
                     })?;
                     overrides.push((key, av));
                 }
@@ -260,7 +316,11 @@ fn parse_styles(n: &KdlNode, styles: &mut Vec<Style>, warnings: &mut Vec<String>
     Ok(())
 }
 
-fn parse_scene(n: &KdlNode, scene: &mut Scene, warnings: &mut Vec<String>) -> Result<(), ThemeError> {
+fn parse_scene(
+    n: &KdlNode,
+    scene: &mut Scene,
+    warnings: &mut Vec<String>,
+) -> Result<(), ThemeError> {
     if let Some(children) = n.children() {
         for child in children.nodes() {
             scene.elements.push(parse_element(child, warnings)?);
@@ -278,7 +338,8 @@ fn parse_element(node: &KdlNode, _warnings: &mut Vec<String>) -> Result<Element,
         "rect" => {
             let size = parse_size(node)?;
             Ok(Element::Rect(RectEl {
-                common, size,
+                common,
+                size,
                 fill: attr(node, "fill")?,
                 stroke: attr(node, "stroke")?,
                 stroke_width: attr(node, "stroke-width")?,
@@ -312,7 +373,8 @@ fn parse_element(node: &KdlNode, _warnings: &mut Vec<String>) -> Result<Element,
                 },
             };
             Ok(Element::Image(ImageEl {
-                common, size,
+                common,
+                size,
                 src: req_attr(node, "src", "image")?,
                 colour,
             }))
@@ -320,7 +382,8 @@ fn parse_element(node: &KdlNode, _warnings: &mut Vec<String>) -> Result<Element,
         "bar" => {
             let size = parse_size(node)?;
             Ok(Element::Bar(BarEl {
-                common, size,
+                common,
+                size,
                 fill: attr(node, "fill")?,
                 radius: attr(node, "radius")?,
                 min: attr(node, "min")?,
@@ -405,12 +468,16 @@ fn entry_value_to_string(e: &kdl::KdlEntry) -> String {
 }
 
 fn node_string(n: &KdlNode) -> Option<String> {
-    n.entries().iter().find(|e| e.name().is_none())
+    n.entries()
+        .iter()
+        .find(|e| e.name().is_none())
         .map(entry_value_to_string)
 }
 
 fn node_int(n: &KdlNode) -> Option<i64> {
-    n.entries().iter().find(|e| e.name().is_none())
+    n.entries()
+        .iter()
+        .find(|e| e.name().is_none())
         .and_then(|e| e.value().as_integer().map(|i| i as i64))
 }
 
@@ -486,14 +553,19 @@ scene {
         assert!(names.contains(&"normal"));
         assert!(names.contains(&"critical"));
         assert!(!t.scene.elements.is_empty());
-        assert!(t.imported_files.is_empty(), "default theme has no imports yet");
+        assert!(
+            t.imported_files.is_empty(),
+            "default theme has no imports yet"
+        );
     }
 
     #[test]
     fn import_inlines_palette_and_tracks_path() {
         let dir = tempfile::tempdir().unwrap();
         let palette_path = dir.path().join("colours.kdl");
-        std::fs::write(&palette_path, r##"
+        std::fs::write(
+            &palette_path,
+            r##"
         palette {
             bg     "#101020"
             fg     "#eeeeee"
@@ -503,15 +575,21 @@ scene {
         styles {
             style "normal" accent="$accent"
         }
-        "##).unwrap();
+        "##,
+        )
+        .unwrap();
         let scene_path = dir.path().join("scene.kdl");
-        std::fs::write(&scene_path, r##"
+        std::fs::write(
+            &scene_path,
+            r##"
         import "colours.kdl"
         surface { width 200; height 40 }
         scene {
             rect z=0 x=0 y=0 width="100%" height="100%" fill="$bg"
         }
-        "##).unwrap();
+        "##,
+        )
+        .unwrap();
         let src = std::fs::read_to_string(&scene_path).unwrap();
         let t = parse_with_base(&src, Some(dir.path())).unwrap();
         assert_eq!(t.palette.get("bg").unwrap().to_string(), "#101020");

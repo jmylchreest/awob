@@ -33,7 +33,9 @@ pub struct Server {
 
 impl Server {
     pub fn bind(path: PathBuf) -> Result<Self, IpcError> {
-        if path.exists() { let _ = std::fs::remove_file(&path); }
+        if path.exists() {
+            let _ = std::fs::remove_file(&path);
+        }
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -42,7 +44,9 @@ impl Server {
         Ok(Self { listener, path })
     }
 
-    pub fn path(&self) -> &Path { &self.path }
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
 
     pub fn try_clone_listener(&self) -> Result<UnixListener, IpcError> {
         Ok(self.listener.try_clone()?)
@@ -67,12 +71,18 @@ where
     loop {
         line.clear();
         let n = reader.read_line(&mut line)?;
-        if n == 0 { return Ok(()); }
+        if n == 0 {
+            return Ok(());
+        }
         let trimmed = line.trim_end();
-        if trimmed.is_empty() { continue; }
+        if trimmed.is_empty() {
+            continue;
+        }
         let response = match serde_json::from_str::<Request>(trimmed) {
             Ok(req) => handler(req),
-            Err(e) => Response::Error { message: format!("bad request: {e}") },
+            Err(e) => Response::Error {
+                message: format!("bad request: {e}"),
+            },
         };
         let mut out = serde_json::to_vec(&response)?;
         out.push(b'\n');
@@ -113,7 +123,8 @@ mod tests {
                         daemon_version: "test".into(),
                     },
                     _ => Response::Ok,
-                }).ok();
+                })
+                .ok();
             }
         });
         let mut client = UnixStream::connect(&p).unwrap();

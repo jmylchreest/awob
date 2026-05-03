@@ -48,10 +48,14 @@ fn ensure_fifo(path: &std::path::Path) -> std::io::Result<()> {
     if let Ok(meta) = std::fs::metadata(path) {
         let ft = meta.file_type();
         use std::os::unix::fs::FileTypeExt;
-        if ft.is_fifo() { return Ok(()); }
+        if ft.is_fifo() {
+            return Ok(());
+        }
         std::fs::remove_file(path)?;
     }
-    if let Some(parent) = path.parent() { std::fs::create_dir_all(parent)?; }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
     mkfifo(path, Mode::S_IRUSR | Mode::S_IWUSR)
         .map_err(|e| std::io::Error::other(format!("mkfifo: {e}")))?;
     Ok(())
@@ -64,7 +68,10 @@ fn parse_line(s: &str) -> Option<(f64, Option<f64>, Option<String>)> {
     let mut style = None;
     for tok in it {
         if let Ok(n) = tok.parse::<f64>() {
-            if max.is_none() { max = Some(n); continue; }
+            if max.is_none() {
+                max = Some(n);
+                continue;
+            }
         }
         style = Some(tok.to_string());
         break;
@@ -73,13 +80,17 @@ fn parse_line(s: &str) -> Option<(f64, Option<f64>, Option<String>)> {
 }
 
 fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
-    let fifo = cli.fifo.clone()
+    let fifo = cli
+        .fifo
+        .clone()
         .or_else(default_fifo_path)
         .ok_or("XDG_RUNTIME_DIR not set; pass --fifo")?;
     ensure_fifo(&fifo)?;
     eprintln!("awob-listener-wob: fifo={}", fifo.display());
 
-    let source = cli.source.unwrap_or_else(|| format!("wob-fifo-{}", std::process::id()));
+    let source = cli
+        .source
+        .unwrap_or_else(|| format!("wob-fifo-{}", std::process::id()));
     eprintln!("awob-listener-wob: source={source}");
 
     loop {
@@ -95,9 +106,17 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         let _fd = f.as_raw_fd();
         let reader = BufReader::new(f);
         for line in reader.lines() {
-            let line = match line { Ok(l) => l, Err(e) => { eprintln!("read: {e}"); break; } };
+            let line = match line {
+                Ok(l) => l,
+                Err(e) => {
+                    eprintln!("read: {e}");
+                    break;
+                }
+            };
             let trimmed = line.trim();
-            if trimmed.is_empty() { continue; }
+            if trimmed.is_empty() {
+                continue;
+            }
             let Some((value, max, style)) = parse_line(trimmed) else {
                 eprintln!("awob-listener-wob: bad line `{trimmed}`");
                 continue;
@@ -109,15 +128,27 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 // expectation when something writes a volume value is
                 // that it shows up immediately, not queued.
                 .preempt(true);
-            if let Some(m) = max { s = s.max(m); }
-            if let Some(st) = style { s = s.style(st); }
+            if let Some(m) = max {
+                s = s.max(m);
+            }
+            if let Some(st) = style {
+                s = s.style(st);
+            }
             match cli.socket.clone() {
                 Some(p) => match Client::connect_to(&p) {
-                    Ok(mut c) => { if let Err(e) = c.send(s.build()) { eprintln!("send: {e}"); } }
+                    Ok(mut c) => {
+                        if let Err(e) = c.send(s.build()) {
+                            eprintln!("send: {e}");
+                        }
+                    }
                     Err(e) => eprintln!("connect: {e}"),
                 },
                 None => match Client::connect() {
-                    Ok(mut c) => { if let Err(e) = c.send(s.build()) { eprintln!("send: {e}"); } }
+                    Ok(mut c) => {
+                        if let Err(e) = c.send(s.build()) {
+                            eprintln!("send: {e}");
+                        }
+                    }
                     Err(e) => eprintln!("connect: {e}"),
                 },
             }
@@ -129,7 +160,10 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
     match run(cli) {
         Ok(()) => ExitCode::SUCCESS,
-        Err(e) => { eprintln!("awob-listener-wob: {e}"); ExitCode::from(1) }
+        Err(e) => {
+            eprintln!("awob-listener-wob: {e}");
+            ExitCode::from(1)
+        }
     }
 }
 
@@ -137,14 +171,30 @@ fn main() -> ExitCode {
 mod tests {
     use super::parse_line;
 
-    #[test] fn just_value() { assert_eq!(parse_line("50"), Some((50.0, None, None))); }
-    #[test] fn value_and_max() { assert_eq!(parse_line("50 200"), Some((50.0, Some(200.0), None))); }
-    #[test] fn value_and_style() {
-        assert_eq!(parse_line("50 normal"), Some((50.0, None, Some("normal".into()))));
+    #[test]
+    fn just_value() {
+        assert_eq!(parse_line("50"), Some((50.0, None, None)));
     }
-    #[test] fn value_max_style() {
-        assert_eq!(parse_line("50 200 critical"),
-                   Some((50.0, Some(200.0), Some("critical".into()))));
+    #[test]
+    fn value_and_max() {
+        assert_eq!(parse_line("50 200"), Some((50.0, Some(200.0), None)));
     }
-    #[test] fn bad() { assert!(parse_line("not a number").is_none()); }
+    #[test]
+    fn value_and_style() {
+        assert_eq!(
+            parse_line("50 normal"),
+            Some((50.0, None, Some("normal".into())))
+        );
+    }
+    #[test]
+    fn value_max_style() {
+        assert_eq!(
+            parse_line("50 200 critical"),
+            Some((50.0, Some(200.0), Some("critical".into())))
+        );
+    }
+    #[test]
+    fn bad() {
+        assert!(parse_line("not a number").is_none());
+    }
 }

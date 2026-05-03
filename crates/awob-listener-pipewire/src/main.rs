@@ -35,7 +35,10 @@ use pw::types::ObjectType;
 /// Both kinds are pipewire `Node` objects; their `media.class` and the
 /// useful labelling fields differ.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum NodeKind { Device, App }
+pub enum NodeKind {
+    Device,
+    App,
+}
 
 /// Per-(channel, kind, node) listener_id. Folding the node hash into the
 /// listener_id means the daemon's duplicate-listener detector treats every
@@ -49,14 +52,17 @@ pub enum NodeKind { Device, App }
 fn listener_id_for(channel: Channel, kind: NodeKind, source: &str) -> String {
     match (channel, kind) {
         (Channel::Speaker, NodeKind::Device) => format!("awob-listener-pipewire-speaker-{source}"),
-        (Channel::Mic,     NodeKind::Device) => format!("awob-listener-pipewire-mic-{source}"),
-        (Channel::Speaker, NodeKind::App)    => format!("awob-listener-pipewire-app-out-{source}"),
-        (Channel::Mic,     NodeKind::App)    => format!("awob-listener-pipewire-app-in-{source}"),
+        (Channel::Mic, NodeKind::Device) => format!("awob-listener-pipewire-mic-{source}"),
+        (Channel::Speaker, NodeKind::App) => format!("awob-listener-pipewire-app-out-{source}"),
+        (Channel::Mic, NodeKind::App) => format!("awob-listener-pipewire-app-in-{source}"),
     }
 }
 
 #[derive(Parser, Debug)]
-#[command(version, about = "awob — pipewire listener (volume / mute -> OSD, event-driven)")]
+#[command(
+    version,
+    about = "awob — pipewire listener (volume / mute -> OSD, event-driven)"
+)]
 struct Cli {
     #[arg(long)]
     socket: Option<PathBuf>,
@@ -89,10 +95,16 @@ struct Cli {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum Channel { Speaker, Mic }
+pub enum Channel {
+    Speaker,
+    Mic,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct AudioState { pub value: f64, pub muted: bool }
+pub struct AudioState {
+    pub value: f64,
+    pub muted: bool,
+}
 
 pub fn fire(
     socket: &Option<PathBuf>,
@@ -104,7 +116,10 @@ pub fn fire(
     app: &str,
     icon_override: Option<&str>,
 ) -> awob_client::Result<()> {
-    let event = match channel { Channel::Speaker => "volume", Channel::Mic => "mic" };
+    let event = match channel {
+        Channel::Speaker => "volume",
+        Channel::Mic => "mic",
+    };
     let listener_id = listener_id_for(channel, kind, source);
     // App streams: prefer the app's own icon (Spotify, Firefox, mpv) so
     // the OSD reads as "Spotify changed volume" at a glance. The bar fill
@@ -116,7 +131,9 @@ pub fn fire(
     };
     let style = pick_style(state.value, state.muted);
     let mut value = state.value;
-    if state.muted && mute_volume_zero { value = 0.0; }
+    if state.muted && mute_volume_zero {
+        value = 0.0;
+    }
     let mut c = match socket {
         Some(p) => Client::connect_to(p)?,
         None => Client::connect()?,
@@ -148,16 +165,28 @@ fn pick_icon(ch: Channel, value: f64, muted: bool) -> &'static str {
             v if v >= 33 => "audio-volume-medium",
             _ => "audio-volume-low",
         },
-        (Channel::Mic, false) => if pct >= 33 { "microphone-sensitivity-high" }
-                                 else { "microphone-sensitivity-low" },
+        (Channel::Mic, false) => {
+            if pct >= 33 {
+                "microphone-sensitivity-high"
+            } else {
+                "microphone-sensitivity-low"
+            }
+        }
     }
 }
 
 fn pick_style(value: f64, muted: bool) -> &'static str {
-    if muted { "muted" }
-    else if value >= 1.0 { "warn" }      // > 100% boost
-    else if value >= 0.33 { "normal" }
-    else { "low" }
+    if muted {
+        "muted"
+    } else if value >= 1.0 {
+        "warn"
+    }
+    // > 100% boost
+    else if value >= 0.33 {
+        "normal"
+    } else {
+        "low"
+    }
 }
 
 /// One event the pipewire mainloop hands off to the I/O worker.
@@ -205,11 +234,16 @@ struct NodeIdentity {
 
 fn identity_for_device(props: &libspa::utils::dict::DictRef) -> Option<NodeIdentity> {
     let node_name = props.get("node.name")?.to_string();
-    let app = props.get("node.description")
+    let app = props
+        .get("node.description")
         .or_else(|| props.get("node.nick"))
         .map(|s| s.to_string())
         .unwrap_or_else(|| node_name.clone());
-    Some(NodeIdentity { source: stable_node_hash(&node_name), app, icon: None })
+    Some(NodeIdentity {
+        source: stable_node_hash(&node_name),
+        app,
+        icon: None,
+    })
 }
 
 /// Build identity for an `Stream/Output/Audio` or `Stream/Input/Audio`
@@ -231,18 +265,25 @@ fn identity_for_app(
     props: &libspa::utils::dict::DictRef,
     binaries: &[String],
 ) -> Option<NodeIdentity> {
-    let binary = props.get("application.process.binary").map(|s| s.to_string());
+    let binary = props
+        .get("application.process.binary")
+        .map(|s| s.to_string());
     if !binaries.is_empty() {
         let bin_lc = binary.as_deref().unwrap_or("").to_ascii_lowercase();
-        if !binaries.iter().any(|b| bin_lc.contains(&b.to_ascii_lowercase())) {
+        if !binaries
+            .iter()
+            .any(|b| bin_lc.contains(&b.to_ascii_lowercase()))
+        {
             return None;
         }
     }
-    let app = props.get("application.name")
+    let app = props
+        .get("application.name")
         .or_else(|| props.get("application.process.binary"))
         .or_else(|| props.get("node.name"))
         .map(|s| s.to_string())?;
-    let icon = props.get("application.icon-name")
+    let icon = props
+        .get("application.icon-name")
         .or_else(|| props.get("application.process.binary"))
         .map(|s| s.to_string());
     let key_for_hash = binary
@@ -316,12 +357,24 @@ fn parse_props_pod(pod: &libspa::pod::Pod) -> Option<AudioState> {
     for prop in &object.properties {
         match prop.key {
             // SPA_PROP_volume
-            0x10003 => if let libspa::pod::Value::Float(f) = &prop.value { single_volume = Some(*f); }
+            0x10003 => {
+                if let libspa::pod::Value::Float(f) = &prop.value {
+                    single_volume = Some(*f);
+                }
+            }
             // SPA_PROP_mute
-            0x10004 => if let libspa::pod::Value::Bool(b) = &prop.value { mute = Some(*b); }
+            0x10004 => {
+                if let libspa::pod::Value::Bool(b) = &prop.value {
+                    mute = Some(*b);
+                }
+            }
             // SPA_PROP_channelVolumes
-            0x10008 => if let libspa::pod::Value::ValueArray(arr) = &prop.value {
-                if let libspa::pod::ValueArray::Float(vs) = arr { channel_volumes = vs.clone(); }
+            0x10008 => {
+                if let libspa::pod::Value::ValueArray(arr) = &prop.value {
+                    if let libspa::pod::ValueArray::Float(vs) = arr {
+                        channel_volumes = vs.clone();
+                    }
+                }
             }
             _ => {}
         }
@@ -345,7 +398,10 @@ fn parse_props_pod(pod: &libspa::pod::Pod) -> Option<AudioState> {
     // linear form. Take the cube root here so the OSD bar matches what
     // those tools display (e.g. wpctl 0.50 → bar at 50%, not at 12.5%).
     let linear = (cubic.max(0.0)).powf(1.0 / 3.0);
-    Some(AudioState { value: linear as f64, muted: mute.unwrap_or(false) })
+    Some(AudioState {
+        value: linear as f64,
+        muted: mute.unwrap_or(false),
+    })
 }
 
 fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
@@ -369,8 +425,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     // (so the param closure can attach it to outgoing events).
     type NodeBinding = (pw::node::Node, pw::node::NodeListener);
     let bound_nodes: Rc<RefCell<HashMap<u32, NodeBinding>>> = Rc::new(RefCell::new(HashMap::new()));
-    let last_state: Rc<RefCell<HashMap<u32, AudioState>>> =
-        Rc::new(RefCell::new(HashMap::new()));
+    let last_state: Rc<RefCell<HashMap<u32, AudioState>>> = Rc::new(RefCell::new(HashMap::new()));
 
     let no_speaker = cli.no_speaker;
     let no_mic = cli.no_mic;
@@ -383,30 +438,48 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     let _registry_listener = registry
         .add_listener_local()
         .global(move |obj| {
-            if obj.type_ != ObjectType::Node { return; }
-            let props = match obj.props { Some(p) => p, None => return };
+            if obj.type_ != ObjectType::Node {
+                return;
+            }
+            let props = match obj.props {
+                Some(p) => p,
+                None => return,
+            };
             let media_class = props.get("media.class").unwrap_or("");
             // Classify: physical device sink/source, or per-app stream.
             let (channel, kind) = match media_class {
-                "Audio/Sink"          => (Channel::Speaker, NodeKind::Device),
-                "Audio/Source"        => (Channel::Mic,     NodeKind::Device),
+                "Audio/Sink" => (Channel::Speaker, NodeKind::Device),
+                "Audio/Source" => (Channel::Mic, NodeKind::Device),
                 "Stream/Output/Audio" if per_app => (Channel::Speaker, NodeKind::App),
-                "Stream/Input/Audio"  if per_app => (Channel::Mic,     NodeKind::App),
+                "Stream/Input/Audio" if per_app => (Channel::Mic, NodeKind::App),
                 _ => return,
             };
-            if matches!(channel, Channel::Speaker) && no_speaker { return; }
-            if matches!(channel, Channel::Mic) && no_mic { return; }
+            if matches!(channel, Channel::Speaker) && no_speaker {
+                return;
+            }
+            if matches!(channel, Channel::Mic) && no_mic {
+                return;
+            }
 
             let identity = match kind {
                 NodeKind::Device => identity_for_device(&props),
-                NodeKind::App    => identity_for_app(&props, &per_app_binaries),
+                NodeKind::App => identity_for_app(&props, &per_app_binaries),
             };
-            let identity = match identity { Some(i) => i, None => return };
+            let identity = match identity {
+                Some(i) => i,
+                None => return,
+            };
 
-            let registry = match registry_weak.upgrade() { Some(r) => r, None => return };
+            let registry = match registry_weak.upgrade() {
+                Some(r) => r,
+                None => return,
+            };
             let node: pw::node::Node = match registry.bind(obj) {
                 Ok(n) => n,
-                Err(e) => { eprintln!("bind node {}: {e}", obj.id); return; }
+                Err(e) => {
+                    eprintln!("bind node {}: {e}", obj.id);
+                    return;
+                }
             };
 
             let id = obj.id;
@@ -415,7 +488,10 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             let listener = node
                 .add_listener_local()
                 .param(move |_seq, _id, _index, _next, pod| {
-                    let pod = match pod { Some(p) => p, None => return };
+                    let pod = match pod {
+                        Some(p) => p,
+                        None => return,
+                    };
                     if let Some(state) = parse_props_pod(pod) {
                         let mut last = last_state_for_param.borrow_mut();
                         if last.get(&id).copied() != Some(state) {
@@ -453,7 +529,10 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
     match run(cli) {
         Ok(()) => ExitCode::SUCCESS,
-        Err(e) => { eprintln!("awob-listener-pipewire: {e}"); ExitCode::from(1) }
+        Err(e) => {
+            eprintln!("awob-listener-pipewire: {e}");
+            ExitCode::from(1)
+        }
     }
 }
 
@@ -461,21 +540,39 @@ fn main() -> ExitCode {
 mod tests {
     use super::*;
 
-    #[test] fn speaker_icons() {
-        assert_eq!(pick_icon(Channel::Speaker, 0.90, false), "audio-volume-high");
-        assert_eq!(pick_icon(Channel::Speaker, 0.50, false), "audio-volume-medium");
+    #[test]
+    fn speaker_icons() {
+        assert_eq!(
+            pick_icon(Channel::Speaker, 0.90, false),
+            "audio-volume-high"
+        );
+        assert_eq!(
+            pick_icon(Channel::Speaker, 0.50, false),
+            "audio-volume-medium"
+        );
         assert_eq!(pick_icon(Channel::Speaker, 0.10, false), "audio-volume-low");
-        assert_eq!(pick_icon(Channel::Speaker, 0.50, true),  "audio-volume-muted");
+        assert_eq!(
+            pick_icon(Channel::Speaker, 0.50, true),
+            "audio-volume-muted"
+        );
     }
-    #[test] fn mic_icons() {
-        assert_eq!(pick_icon(Channel::Mic, 0.50, false), "microphone-sensitivity-high");
-        assert_eq!(pick_icon(Channel::Mic, 0.10, false), "microphone-sensitivity-low");
-        assert_eq!(pick_icon(Channel::Mic, 0.50, true),  "microphone-disabled");
+    #[test]
+    fn mic_icons() {
+        assert_eq!(
+            pick_icon(Channel::Mic, 0.50, false),
+            "microphone-sensitivity-high"
+        );
+        assert_eq!(
+            pick_icon(Channel::Mic, 0.10, false),
+            "microphone-sensitivity-low"
+        );
+        assert_eq!(pick_icon(Channel::Mic, 0.50, true), "microphone-disabled");
     }
-    #[test] fn styles() {
-        assert_eq!(pick_style(1.5,  false), "warn");
-        assert_eq!(pick_style(0.5,  false), "normal");
+    #[test]
+    fn styles() {
+        assert_eq!(pick_style(1.5, false), "warn");
+        assert_eq!(pick_style(0.5, false), "normal");
         assert_eq!(pick_style(0.10, false), "low");
-        assert_eq!(pick_style(0.5,  true), "muted");
+        assert_eq!(pick_style(0.5, true), "muted");
     }
 }

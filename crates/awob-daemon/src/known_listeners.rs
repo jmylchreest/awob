@@ -14,10 +14,22 @@ pub struct KnownListener {
 }
 
 pub const KNOWN_LISTENERS: &[KnownListener] = &[
-    KnownListener { name: "pipewire",           binary: "awob-listener-pipewire" },
-    KnownListener { name: "upower",             binary: "awob-listener-upower" },
-    KnownListener { name: "backlight",          binary: "awob-listener-backlight" },
-    KnownListener { name: "keyboard-backlight", binary: "awob-listener-keyboard-backlight" },
+    KnownListener {
+        name: "pipewire",
+        binary: "awob-listener-pipewire",
+    },
+    KnownListener {
+        name: "upower",
+        binary: "awob-listener-upower",
+    },
+    KnownListener {
+        name: "backlight",
+        binary: "awob-listener-backlight",
+    },
+    KnownListener {
+        name: "keyboard-backlight",
+        binary: "awob-listener-keyboard-backlight",
+    },
 ];
 
 /// Resolve `binary_name` to an executable path. Checks the daemon's own
@@ -74,7 +86,11 @@ mod tests {
         let mut sorted = names.clone();
         sorted.sort();
         sorted.dedup();
-        assert_eq!(names.len(), sorted.len(), "duplicate listener name in registry");
+        assert_eq!(
+            names.len(),
+            sorted.len(),
+            "duplicate listener name in registry"
+        );
     }
 
     #[test]

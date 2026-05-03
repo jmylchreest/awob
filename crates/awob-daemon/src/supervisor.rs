@@ -36,7 +36,11 @@ struct ChildState {
 }
 
 impl Supervisor {
-    pub fn new() -> Self { Self { children: HashMap::new() } }
+    pub fn new() -> Self {
+        Self {
+            children: HashMap::new(),
+        }
+    }
 
     /// Spawn every configured listener immediately. Failures are logged
     /// but don't stop the daemon — the supervisor loop will retry.
@@ -60,7 +64,9 @@ impl Supervisor {
     pub fn tick(&mut self, socket_path: Option<&PathBuf>) {
         let now = Instant::now();
         for (name, state) in self.children.iter_mut() {
-            if state.stopped { continue; }
+            if state.stopped {
+                continue;
+            }
 
             // Reap exited children.
             let exited = if let Some(p) = state.process.as_mut() {
@@ -72,7 +78,9 @@ impl Supervisor {
                         None
                     }
                 }
-            } else { None };
+            } else {
+                None
+            };
 
             if let Some(status) = exited {
                 state.process = None;
@@ -85,8 +93,16 @@ impl Supervisor {
                 };
                 eprintln!(
                     "supervisor[{name}]: exited {} restart={policy:?} -> {}",
-                    if success { "cleanly".into() } else { format!("with {status:?}") },
-                    if should_restart { "will respawn" } else { "stopping" },
+                    if success {
+                        "cleanly".into()
+                    } else {
+                        format!("with {status:?}")
+                    },
+                    if should_restart {
+                        "will respawn"
+                    } else {
+                        "stopping"
+                    },
                 );
                 if !should_restart {
                     state.stopped = true;
@@ -125,9 +141,13 @@ impl Supervisor {
             let any_alive = self.children.values_mut().any(|s| {
                 if let Some(p) = s.process.as_mut() {
                     matches!(p.try_wait(), Ok(None))
-                } else { false }
+                } else {
+                    false
+                }
             });
-            if !any_alive { return; }
+            if !any_alive {
+                return;
+            }
             std::thread::sleep(poll);
         }
         for (name, state) in self.children.iter_mut() {
@@ -148,8 +168,14 @@ fn spawn_child(state: &mut ChildState, socket_path: Option<&PathBuf>) {
 
     // Expand `$VAR` and `~/` in args so config files can reference
     // standard paths without being absolute.
-    let expanded: Vec<String> = cfg.args.iter()
-        .map(|a| awob_core::paths::expand_config_path(a).to_string_lossy().into_owned())
+    let expanded: Vec<String> = cfg
+        .args
+        .iter()
+        .map(|a| {
+            awob_core::paths::expand_config_path(a)
+                .to_string_lossy()
+                .into_owned()
+        })
         .collect();
     cmd.args(&expanded);
 

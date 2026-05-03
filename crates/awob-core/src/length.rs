@@ -11,7 +11,10 @@ pub enum Length {
     /// Percent of parent extent.
     Percent(f64),
     /// `<percent>% +/- <px>` shorthand for "p% of parent ± fixed px".
-    Mixed { percent: f64, px: f64 },
+    Mixed {
+        percent: f64,
+        px: f64,
+    },
     Center,
 }
 
@@ -41,9 +44,14 @@ impl Length {
                 Some('-') => (-1.0, rest[1..].trim()),
                 _ => return Err(LengthError::Bad(s.into())),
             };
-            let px: f64 = num_str.trim_end_matches("px").parse()
+            let px: f64 = num_str
+                .trim_end_matches("px")
+                .parse()
                 .map_err(|_| LengthError::Bad(s.into()))?;
-            return Ok(Length::Mixed { percent, px: px * sign });
+            return Ok(Length::Mixed {
+                percent,
+                px: px * sign,
+            });
         }
         let stripped = s.trim_end_matches("px");
         let px: f64 = stripped.parse().map_err(|_| LengthError::Bad(s.into()))?;
@@ -57,8 +65,11 @@ impl fmt::Display for Length {
             Length::Px(v) => write!(f, "{v}px"),
             Length::Percent(p) => write!(f, "{p}%"),
             Length::Mixed { percent, px } => {
-                if px >= 0.0 { write!(f, "{percent}%+{px}") }
-                else { write!(f, "{percent}%{px}") }
+                if px >= 0.0 {
+                    write!(f, "{percent}%+{px}")
+                } else {
+                    write!(f, "{percent}%{px}")
+                }
             }
             Length::Center => write!(f, "center"),
         }
@@ -75,19 +86,53 @@ pub enum LengthError {
 mod tests {
     use super::*;
 
-    #[test] fn px() { assert_eq!(Length::parse("100").unwrap(), Length::Px(100.0)); }
-    #[test] fn px_suffix() { assert_eq!(Length::parse("100px").unwrap(), Length::Px(100.0)); }
-    #[test] fn percent() { assert_eq!(Length::parse("50%").unwrap(), Length::Percent(50.0)); }
-    #[test] fn mixed_minus() {
-        assert_eq!(Length::parse("100%-60").unwrap(), Length::Mixed { percent: 100.0, px: -60.0 });
+    #[test]
+    fn px() {
+        assert_eq!(Length::parse("100").unwrap(), Length::Px(100.0));
     }
-    #[test] fn mixed_plus() {
-        assert_eq!(Length::parse("100% + 8").unwrap(), Length::Mixed { percent: 100.0, px: 8.0 });
+    #[test]
+    fn px_suffix() {
+        assert_eq!(Length::parse("100px").unwrap(), Length::Px(100.0));
     }
-    #[test] fn center() { assert_eq!(Length::parse("center").unwrap(), Length::Center); }
+    #[test]
+    fn percent() {
+        assert_eq!(Length::parse("50%").unwrap(), Length::Percent(50.0));
+    }
+    #[test]
+    fn mixed_minus() {
+        assert_eq!(
+            Length::parse("100%-60").unwrap(),
+            Length::Mixed {
+                percent: 100.0,
+                px: -60.0
+            }
+        );
+    }
+    #[test]
+    fn mixed_plus() {
+        assert_eq!(
+            Length::parse("100% + 8").unwrap(),
+            Length::Mixed {
+                percent: 100.0,
+                px: 8.0
+            }
+        );
+    }
+    #[test]
+    fn center() {
+        assert_eq!(Length::parse("center").unwrap(), Length::Center);
+    }
 
-    #[test] fn resolve() {
-        assert_eq!(Length::Mixed { percent: 100.0, px: -60.0 }.resolve(360.0), 300.0);
+    #[test]
+    fn resolve() {
+        assert_eq!(
+            Length::Mixed {
+                percent: 100.0,
+                px: -60.0
+            }
+            .resolve(360.0),
+            300.0
+        );
         assert_eq!(Length::Percent(50.0).resolve(360.0), 180.0);
         assert_eq!(Length::Px(42.0).resolve(360.0), 42.0);
         assert_eq!(Length::Center.resolve(64.0), 32.0);

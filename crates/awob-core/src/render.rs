@@ -47,7 +47,9 @@ pub struct Renderer {
 }
 
 impl Default for Renderer {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Renderer {
@@ -76,7 +78,10 @@ impl Renderer {
             .ok_or_else(|| RenderError::Other(format!("Pixmap::new({w},{h}) failed")))?;
         pixmap.fill(SkColor::TRANSPARENT);
 
-        let frame = Frame { w: w as f32, h: h as f32 };
+        let frame = Frame {
+            w: w as f32,
+            h: h as f32,
+        };
 
         let elements = sorted_by_z(&theme.scene.elements);
         for element in elements {
@@ -101,13 +106,27 @@ fn sorted_by_z(elements: &[Element]) -> Vec<&Element> {
 }
 
 #[derive(Clone, Copy)]
-struct Frame { w: f32, h: f32 }
+struct Frame {
+    w: f32,
+    h: f32,
+}
 
 #[derive(Clone, Copy, Debug)]
-struct Box2 { x: f32, y: f32, w: f32, h: f32 }
+struct Box2 {
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+}
 
 impl Renderer {
-    fn draw_element(&mut self, el: &Element, frame: &Frame, b: &Bindings, pm: &mut Pixmap) -> Result<(), RenderError> {
+    fn draw_element(
+        &mut self,
+        el: &Element,
+        frame: &Frame,
+        b: &Bindings,
+        pm: &mut Pixmap,
+    ) -> Result<(), RenderError> {
         match el {
             Element::Rect(r) => self.draw_rect_with_shadow(r, frame, b, pm),
             Element::Bar(r) => draw_bar(r, frame, b, pm),
@@ -116,9 +135,17 @@ impl Renderer {
         }
     }
 
-    fn draw_text(&mut self, t: &TextEl, frame: &Frame, b: &Bindings, pm: &mut Pixmap) -> Result<(), RenderError> {
+    fn draw_text(
+        &mut self,
+        t: &TextEl,
+        frame: &Frame,
+        b: &Bindings,
+        pm: &mut Pixmap,
+    ) -> Result<(), RenderError> {
         let label = t.value.render(b)?;
-        if label.is_empty() { return Ok(()); }
+        if label.is_empty() {
+            return Ok(());
+        }
         let font_spec = match &t.font {
             Some(f) => FontSpec::parse(f),
             None => FontSpec::default(),
@@ -126,13 +153,22 @@ impl Renderer {
         let (text_w, text_h) = self.text.measure(&label, &font_spec);
         let bb_x = resolve_x(&t.common, frame, b, text_w)?;
         let bb_y = resolve_y(&t.common, frame, b, text_h)?;
-        let colour = t.colour.as_ref().and_then(|a| try_render_colour(a, b))
+        let colour = t
+            .colour
+            .as_ref()
+            .and_then(|a| try_render_colour(a, b))
             .unwrap_or(Colour::rgb(0xff, 0xff, 0xff));
         self.text.draw(pm, bb_x, bb_y, &label, &font_spec, colour);
         Ok(())
     }
 
-    fn draw_image(&mut self, i: &ImageEl, frame: &Frame, b: &Bindings, pm: &mut Pixmap) -> Result<(), RenderError> {
+    fn draw_image(
+        &mut self,
+        i: &ImageEl,
+        frame: &Frame,
+        b: &Bindings,
+        pm: &mut Pixmap,
+    ) -> Result<(), RenderError> {
         let bb = resolve_box(&i.common, &i.size, frame, b)?;
         let src = i.src.render(b)?;
         let bb_w = bb.w.round().max(1.0) as u32;
@@ -159,8 +195,12 @@ impl Renderer {
                 }
             }
             if !explicit_disable && tint_to.is_none() && was_symbolic {
-                tint_to = Some(b.palette.get("fg").copied()
-                    .unwrap_or(Colour::rgb(0xff, 0xff, 0xff)));
+                tint_to = Some(
+                    b.palette
+                        .get("fg")
+                        .copied()
+                        .unwrap_or(Colour::rgb(0xff, 0xff, 0xff)),
+                );
             }
             if let Some(c) = tint_to {
                 crate::icon::tint_pixmap(&mut icon_pm, c);
@@ -168,7 +208,11 @@ impl Renderer {
             blit_pixmap(pm, &icon_pm, bb.x, bb.y);
             return Ok(());
         }
-        let colour = b.palette.get("fg").copied().unwrap_or(Colour::rgb(0xff, 0xff, 0xff));
+        let colour = b
+            .palette
+            .get("fg")
+            .copied()
+            .unwrap_or(Colour::rgb(0xff, 0xff, 0xff));
         fill_rounded_rect(pm, bb, bb.w.min(bb.h) / 4.0, with_alpha(colour, 0.25));
         Ok(())
     }
@@ -186,14 +230,20 @@ fn blit_pixmap(dst: &mut Pixmap, src: &Pixmap, x: f32, y: f32) {
     let src_data = src.data();
     for sy in 0..src_h {
         let py = oy + sy;
-        if py < 0 || py >= dst_h { continue; }
+        if py < 0 || py >= dst_h {
+            continue;
+        }
         for sx in 0..src_w {
             let px = ox + sx;
-            if px < 0 || px >= dst_w { continue; }
+            if px < 0 || px >= dst_w {
+                continue;
+            }
             let s_idx = ((sy * src_w + sx) * 4) as usize;
             let d_idx = (py * stride + px * 4) as usize;
             let s_a = src_data[s_idx + 3] as u32;
-            if s_a == 0 { continue; }
+            if s_a == 0 {
+                continue;
+            }
             let inv = 255 - s_a;
             for c in 0..3 {
                 let s = src_data[s_idx + c] as u32;
@@ -221,8 +271,11 @@ impl Renderer {
             if let Ok(s) = shadow_attr.render(b) {
                 if let Some(spec) = crate::shadow::parse(&s) {
                     let bb = resolve_box(&r.common, &r.size, frame, b)?;
-                    let radius = r.radius.as_ref()
-                        .map(|a| a.render_number(b)).transpose()?
+                    let radius = r
+                        .radius
+                        .as_ref()
+                        .map(|a| a.render_number(b))
+                        .transpose()?
                         .unwrap_or(0.0) as f32;
                     self.draw_shadow(pm, bb, radius, spec);
                 }
@@ -231,10 +284,18 @@ impl Renderer {
         draw_rect(r, frame, b, pm)
     }
 
-    fn draw_shadow(&mut self, pm: &mut Pixmap, bb: Box2, radius: f32, spec: crate::shadow::ShadowSpec) {
+    fn draw_shadow(
+        &mut self,
+        pm: &mut Pixmap,
+        bb: Box2,
+        radius: f32,
+        spec: crate::shadow::ShadowSpec,
+    ) {
         let w = bb.w.round().max(0.0) as u32;
         let h = bb.h.round().max(0.0) as u32;
-        if w == 0 || h == 0 || spec.colour.a == 0 { return; }
+        if w == 0 || h == 0 || spec.colour.a == 0 {
+            return;
+        }
         let radius_u = radius.round().max(0.0) as u32;
         let blur_u = spec.blur_radius.round().max(0.0) as u32;
         let pad = crate::shadow::shadow_padding(blur_u) as f32;
@@ -242,7 +303,10 @@ impl Renderer {
         // Owned copy lets us drop the cache borrow before mutably touching `pm`.
         let owned: Vec<u8> = mask.to_vec();
         blit_shadow_mask(
-            pm, &owned, mw, mh,
+            pm,
+            &owned,
+            mw,
+            mh,
             bb.x + spec.offset_x - pad,
             bb.y + spec.offset_y - pad,
             spec.colour,
@@ -269,40 +333,61 @@ fn blit_shadow_mask(
     let cg = colour.g as u32;
     let cb = colour.b as u32;
     let ca = colour.a as u32;
-    if ca == 0 { return; }
+    if ca == 0 {
+        return;
+    }
     for my in 0..mh as i32 {
         let py = oy + my;
-        if py < 0 || py >= dst_h { continue; }
+        if py < 0 || py >= dst_h {
+            continue;
+        }
         let row_idx = (my as u32 * mw) as usize;
         for mx in 0..mw as i32 {
             let px = ox + mx;
-            if px < 0 || px >= dst_w { continue; }
+            if px < 0 || px >= dst_w {
+                continue;
+            }
             let m = mask[row_idx + mx as usize] as u32;
-            if m == 0 { continue; }
+            if m == 0 {
+                continue;
+            }
             let eff = m * ca / 255;
-            if eff == 0 { continue; }
+            if eff == 0 {
+                continue;
+            }
             let inv = 255 - eff;
             let d_idx = (py * stride + px * 4) as usize;
-            dst_data[d_idx]     = ((cr * eff / 255) + (dst_data[d_idx]     as u32) * inv / 255) as u8;
-            dst_data[d_idx + 1] = ((cg * eff / 255) + (dst_data[d_idx + 1] as u32) * inv / 255) as u8;
-            dst_data[d_idx + 2] = ((cb * eff / 255) + (dst_data[d_idx + 2] as u32) * inv / 255) as u8;
-            dst_data[d_idx + 3] = (eff               + (dst_data[d_idx + 3] as u32) * inv / 255) as u8;
+            dst_data[d_idx] = ((cr * eff / 255) + (dst_data[d_idx] as u32) * inv / 255) as u8;
+            dst_data[d_idx + 1] =
+                ((cg * eff / 255) + (dst_data[d_idx + 1] as u32) * inv / 255) as u8;
+            dst_data[d_idx + 2] =
+                ((cb * eff / 255) + (dst_data[d_idx + 2] as u32) * inv / 255) as u8;
+            dst_data[d_idx + 3] = (eff + (dst_data[d_idx + 3] as u32) * inv / 255) as u8;
         }
     }
 }
 
 fn draw_rect(r: &RectEl, frame: &Frame, b: &Bindings, pm: &mut Pixmap) -> Result<(), RenderError> {
     let bb = resolve_box(&r.common, &r.size, frame, b)?;
-    let radius = r.radius.as_ref()
-        .map(|a| a.render_number(b)).transpose()?
+    let radius = r
+        .radius
+        .as_ref()
+        .map(|a| a.render_number(b))
+        .transpose()?
         .unwrap_or(0.0) as f32;
-    let fill = r.fill.as_ref().and_then(|a| try_render_colour(a, b))
+    let fill = r
+        .fill
+        .as_ref()
+        .and_then(|a| try_render_colour(a, b))
         .unwrap_or(Colour::TRANSPARENT);
     fill_rounded_rect(pm, bb, radius, fill);
     if let Some(stroke_attr) = &r.stroke {
         if let Some(stroke_color) = try_render_colour(stroke_attr, b) {
-            let sw = r.stroke_width.as_ref()
-                .map(|a| a.render_number(b)).transpose()?
+            let sw = r
+                .stroke_width
+                .as_ref()
+                .map(|a| a.render_number(b))
+                .transpose()?
                 .unwrap_or(1.0) as f32;
             stroke_rounded_rect(pm, bb, radius, sw, stroke_color);
         }
@@ -313,13 +398,30 @@ fn draw_rect(r: &RectEl, frame: &Frame, b: &Bindings, pm: &mut Pixmap) -> Result
 fn draw_bar(r: &BarEl, frame: &Frame, b: &Bindings, pm: &mut Pixmap) -> Result<(), RenderError> {
     let bb = resolve_box(&r.common, &r.size, frame, b)?;
     let value = r.value.render_number(b)?;
-    let max = r.max.as_ref().map(|a| a.render_number(b)).transpose()?
+    let max = r
+        .max
+        .as_ref()
+        .map(|a| a.render_number(b))
+        .transpose()?
         .unwrap_or_else(|| b.get("max").as_number().unwrap_or(100.0));
-    let min = r.min.as_ref().map(|a| a.render_number(b)).transpose()?.unwrap_or(0.0);
+    let min = r
+        .min
+        .as_ref()
+        .map(|a| a.render_number(b))
+        .transpose()?
+        .unwrap_or(0.0);
     let span = (max - min).max(f64::EPSILON);
     let progress = ((value - min) / span).clamp(0.0, 1.0);
-    let radius = r.radius.as_ref().map(|a| a.render_number(b)).transpose()?.unwrap_or(0.0) as f32;
-    let fill_color = r.fill.as_ref().and_then(|a| try_render_colour(a, b))
+    let radius = r
+        .radius
+        .as_ref()
+        .map(|a| a.render_number(b))
+        .transpose()?
+        .unwrap_or(0.0) as f32;
+    let fill_color = r
+        .fill
+        .as_ref()
+        .and_then(|a| try_render_colour(a, b))
         .or_else(|| accent_from_bindings(b))
         .unwrap_or(Colour::rgb(0xba, 0xea, 0x96));
 
@@ -328,27 +430,37 @@ fn draw_bar(r: &BarEl, frame: &Frame, b: &Bindings, pm: &mut Pixmap) -> Result<(
     // mode just animates filled-count smoothly via a fractional last cell.
     if let Some(cells_attr) = &r.cells {
         let n = cells_attr.render_number(b)?.max(1.0) as u32;
-        let gap = r.gap.as_ref().map(|a| a.render_number(b)).transpose()?
+        let gap = r
+            .gap
+            .as_ref()
+            .map(|a| a.render_number(b))
+            .transpose()?
             .unwrap_or(2.0) as f32;
         return draw_bar_cells(bb, radius, fill_color, n, gap, progress as f32, pm);
     }
 
     // Continuous-fill mode: render the settled bar, then overlay a
     // transition wedge for growing values.
-    let filled = Box2 { w: bb.w * progress as f32, ..bb };
+    let filled = Box2 {
+        w: bb.w * progress as f32,
+        ..bb
+    };
     fill_rounded_rect(pm, filled, radius, fill_color);
 
     // Wedge overlay. Only drawn when growing — `from < value` — so the
     // wedge represents new territory being claimed by the bar. For
     // shrinking values we just let the bar contract; no ghost above the
     // current level.
-    let from_val = r.from.as_ref()
+    let from_val = r
+        .from
+        .as_ref()
         .and_then(|a| a.render_number(b).ok())
         .unwrap_or(value);
     if from_val < value {
         let from_progress = ((from_val - min) / span).clamp(0.0, 1.0);
         if from_progress < progress {
-            let t = b.get("transitionProgress")
+            let t = b
+                .get("transitionProgress")
                 .as_number()
                 .unwrap_or(1.0)
                 .clamp(0.0, 1.0) as f32;
@@ -356,7 +468,9 @@ fn draw_bar(r: &BarEl, frame: &Frame, b: &Bindings, pm: &mut Pixmap) -> Result<(
             // so the wedge fades into the bar by the time it settles. A
             // strong default makes the delta visible at a glance; theme
             // authors can soften with `transition="-20%"` (etc.) on the bar.
-            let peak_tint = r.transition.as_ref()
+            let peak_tint = r
+                .transition
+                .as_ref()
                 .and_then(|a| a.render(b).ok())
                 .and_then(|s| parse_percentage(&s))
                 .unwrap_or(-0.80);
@@ -369,7 +483,11 @@ fn draw_bar(r: &BarEl, frame: &Frame, b: &Bindings, pm: &mut Pixmap) -> Result<(
             // wedge box ends at `progress`, the same place the bar does.
             // The left edge is at `from_progress` mid-bar — drawn flat so
             // it abuts the settled region cleanly.
-            let wedge_box = Box2 { x: wedge_x, w: wedge_w, ..bb };
+            let wedge_box = Box2 {
+                x: wedge_x,
+                w: wedge_w,
+                ..bb
+            };
             fill_partial_rounded_rect(pm, wedge_box, radius, delta_color, false, true);
         }
     }
@@ -389,7 +507,9 @@ fn draw_bar_cells(
     progress: f32,
     pm: &mut Pixmap,
 ) -> Result<(), RenderError> {
-    if n == 0 || bb.w <= 0.0 || bb.h <= 0.0 { return Ok(()); }
+    if n == 0 || bb.w <= 0.0 || bb.h <= 0.0 {
+        return Ok(());
+    }
     let n_f = n as f32;
     // Total gap width = gap * (n - 1), but when n == 1 there are no gaps.
     let gaps_total = gap * (n_f - 1.0).max(0.0);
@@ -406,7 +526,12 @@ fn draw_bar_cells(
         } else {
             continue;
         };
-        let cell = Box2 { x, y: bb.y, w, h: bb.h };
+        let cell = Box2 {
+            x,
+            y: bb.y,
+            w,
+            h: bb.h,
+        };
         fill_rounded_rect(pm, cell, radius, fill);
     }
     Ok(())
@@ -417,14 +542,21 @@ fn draw_bar_cells(
 /// outside `[-1, 1]` are clamped. Alpha is preserved.
 fn tint(c: Colour, amount: f32) -> Colour {
     let a = amount.clamp(-1.0, 1.0);
-    if a == 0.0 { return c; }
+    if a == 0.0 {
+        return c;
+    }
     let target = if a > 0.0 { 255.0 } else { 0.0 };
     let mag = a.abs();
     let blend = |x: u8| -> u8 {
         let v = (x as f32) + (target - x as f32) * mag;
         v.clamp(0.0, 255.0) as u8
     };
-    Colour { r: blend(c.r), g: blend(c.g), b: blend(c.b), a: c.a }
+    Colour {
+        r: blend(c.r),
+        g: blend(c.g),
+        b: blend(c.b),
+        a: c.a,
+    }
 }
 
 /// Parse `-20%`, `20%`, `-0.2`, `0.2` etc. into a fractional value in
@@ -441,8 +573,12 @@ fn parse_percentage(s: &str) -> Option<f32> {
 fn try_render_colour(a: &AttrValue, b: &Bindings) -> Option<Colour> {
     let s = a.render(b).ok()?;
     let s = s.trim();
-    if s.is_empty() { return None; }
-    if let Some(c) = b.palette.get(s).copied() { return Some(c); }
+    if s.is_empty() {
+        return None;
+    }
+    if let Some(c) = b.palette.get(s).copied() {
+        return Some(c);
+    }
     Colour::parse(s).ok()
 }
 
@@ -450,20 +586,28 @@ fn accent_from_bindings(b: &Bindings) -> Option<Colour> {
     match b.get("accent") {
         crate::bindings::Value::Colour(c) => Some(c),
         crate::bindings::Value::String(s) => {
-            if let Some(c) = b.palette.get(&s).copied() { return Some(c); }
+            if let Some(c) = b.palette.get(&s).copied() {
+                return Some(c);
+            }
             Colour::parse(&s).ok()
         }
         _ => None,
     }
 }
 
-
 fn with_alpha(c: Colour, mul: f32) -> Colour {
-    Colour { r: c.r, g: c.g, b: c.b, a: ((c.a as f32) * mul).clamp(0.0, 255.0) as u8 }
+    Colour {
+        r: c.r,
+        g: c.g,
+        b: c.b,
+        a: ((c.a as f32) * mul).clamp(0.0, 255.0) as u8,
+    }
 }
 
 fn fill_rounded_rect(pm: &mut Pixmap, bb: Box2, radius: f32, colour: Colour) {
-    if bb.w <= 0.0 || bb.h <= 0.0 || colour.a == 0 { return; }
+    if bb.w <= 0.0 || bb.h <= 0.0 || colour.a == 0 {
+        return;
+    }
     let mut paint = Paint::default();
     paint.set_color_rgba8(colour.r, colour.g, colour.b, colour.a);
     paint.anti_alias = true;
@@ -481,7 +625,9 @@ fn fill_rounded_rect(pm: &mut Pixmap, bb: Box2, radius: f32, colour: Colour) {
 }
 
 fn stroke_rounded_rect(pm: &mut Pixmap, bb: Box2, radius: f32, width: f32, colour: Colour) {
-    if bb.w <= 0.0 || bb.h <= 0.0 || colour.a == 0 || width <= 0.0 { return; }
+    if bb.w <= 0.0 || bb.h <= 0.0 || colour.a == 0 || width <= 0.0 {
+        return;
+    }
     let mut paint = Paint::default();
     paint.set_color_rgba8(colour.r, colour.g, colour.b, colour.a);
     paint.anti_alias = true;
@@ -522,7 +668,14 @@ fn rounded_rect_path_sides(
     }
     pb.line_to(x + w, y + h - rr);
     if rr > 0.0 {
-        pb.cubic_to(x + w, y + h - rr * 0.45, x + w - rr * 0.45, y + h, x + w - rr, y + h);
+        pb.cubic_to(
+            x + w,
+            y + h - rr * 0.45,
+            x + w - rr * 0.45,
+            y + h,
+            x + w - rr,
+            y + h,
+        );
     }
     pb.line_to(x + lr, y + h);
     if lr > 0.0 {
@@ -544,7 +697,9 @@ fn fill_partial_rounded_rect(
     round_left: bool,
     round_right: bool,
 ) {
-    if bb.w <= 0.0 || bb.h <= 0.0 || colour.a == 0 { return; }
+    if bb.w <= 0.0 || bb.h <= 0.0 || colour.a == 0 {
+        return;
+    }
     let mut paint = Paint::default();
     paint.set_color_rgba8(colour.r, colour.g, colour.b, colour.a);
     paint.anti_alias = true;
@@ -554,7 +709,12 @@ fn fill_partial_rounded_rect(
     }
 }
 
-fn resolve_box(common: &Common, size: &Sized, frame: &Frame, b: &Bindings) -> Result<Box2, RenderError> {
+fn resolve_box(
+    common: &Common,
+    size: &Sized,
+    frame: &Frame,
+    b: &Bindings,
+) -> Result<Box2, RenderError> {
     let w = size.width.render_length(b)?.resolve(frame.w as f64) as f32;
     let h = size.height.render_length(b)?.resolve(frame.h as f64) as f32;
     let x = resolve_x(common, frame, b, w)?;

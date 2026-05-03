@@ -37,7 +37,9 @@ pub struct History {
 }
 
 impl History {
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     pub fn record(
         &mut self,
@@ -108,7 +110,9 @@ impl History {
                     if let Some(lid) = lid {
                         if let Some(set) = self.by_listener.get_mut(&lid) {
                             set.remove(&src);
-                            if set.is_empty() { self.by_listener.remove(&lid); }
+                            if set.is_empty() {
+                                self.by_listener.remove(&lid);
+                            }
                         }
                     }
                 }
@@ -118,9 +122,9 @@ impl History {
 
     /// Iterate every `(source, event, entry)` triple in the map.
     pub fn entries(&self) -> impl Iterator<Item = (&String, &String, &Entry)> {
-        self.by_source.iter().flat_map(|(s, events)| {
-            events.iter().map(move |(e, entry)| (s, e, entry))
-        })
+        self.by_source
+            .iter()
+            .flat_map(|(s, events)| events.iter().map(move |(e, entry)| (s, e, entry)))
     }
 }
 
@@ -142,7 +146,13 @@ mod tests {
     #[test]
     fn record_and_get() {
         let mut h = History::new();
-        h.record("pipewire-7a3f", Some("awob-listener-pipewire"), "volume", 50.0, 100.0);
+        h.record(
+            "pipewire-7a3f",
+            Some("awob-listener-pipewire"),
+            "volume",
+            50.0,
+            100.0,
+        );
         let e = h.get("pipewire-7a3f", "volume").unwrap();
         assert_eq!(e.event, "volume");
         assert_eq!(e.last_value, 50.0);
@@ -153,7 +163,13 @@ mod tests {
     #[test]
     fn distinct_events_on_same_source_do_not_cross_contaminate() {
         let mut h = History::new();
-        h.record("speaker", Some("awob-listener-pipewire"), "volume", 0.6, 1.0);
+        h.record(
+            "speaker",
+            Some("awob-listener-pipewire"),
+            "volume",
+            0.6,
+            1.0,
+        );
         h.record("speaker", Some("awob-listener-pipewire"), "mute", 1.0, 1.0);
         // After the mute send, the volume history must still report 0.6 —
         // a regression in the old single-key map would have it report 1.0
@@ -178,9 +194,21 @@ mod tests {
     #[test]
     fn duplicate_listener_detected_when_two_processes_share_listener_id() {
         let mut h = History::new();
-        let r1 = h.record("aaaa", Some("awob-listener-pipewire-speaker"), "volume", 10.0, 100.0);
+        let r1 = h.record(
+            "aaaa",
+            Some("awob-listener-pipewire-speaker"),
+            "volume",
+            10.0,
+            100.0,
+        );
         assert!(r1.duplicate_listener.is_none());
-        let r2 = h.record("bbbb", Some("awob-listener-pipewire-speaker"), "volume", 20.0, 100.0);
+        let r2 = h.record(
+            "bbbb",
+            Some("awob-listener-pipewire-speaker"),
+            "volume",
+            20.0,
+            100.0,
+        );
         let dup = r2.duplicate_listener.expect("expected duplicate detection");
         assert_eq!(dup.listener_id, "awob-listener-pipewire-speaker");
         assert_eq!(dup.sources.len(), 2);
@@ -189,11 +217,25 @@ mod tests {
     #[test]
     fn different_listener_ids_are_independent() {
         let mut h = History::new();
-        let r1 = h.record("aaaa", Some("awob-listener-pipewire-speaker"), "volume", 50.0, 100.0);
+        let r1 = h.record(
+            "aaaa",
+            Some("awob-listener-pipewire-speaker"),
+            "volume",
+            50.0,
+            100.0,
+        );
         assert!(r1.duplicate_listener.is_none());
-        let r2 = h.record("aaaa", Some("awob-listener-pipewire-mic"), "mic", 80.0, 100.0);
-        assert!(r2.duplicate_listener.is_none(),
-            "different listener_ids should never trigger duplicate detection, even with the same source");
+        let r2 = h.record(
+            "aaaa",
+            Some("awob-listener-pipewire-mic"),
+            "mic",
+            80.0,
+            100.0,
+        );
+        assert!(
+            r2.duplicate_listener.is_none(),
+            "different listener_ids should never trigger duplicate detection, even with the same source"
+        );
     }
 
     #[test]
@@ -217,7 +259,13 @@ mod tests {
         // One PipeWire process publishing both `volume` and `mute` for the
         // same source must not be flagged as a duplicate listener.
         let mut h = History::new();
-        let r1 = h.record("speaker", Some("awob-listener-pipewire"), "volume", 0.6, 1.0);
+        let r1 = h.record(
+            "speaker",
+            Some("awob-listener-pipewire"),
+            "volume",
+            0.6,
+            1.0,
+        );
         let r2 = h.record("speaker", Some("awob-listener-pipewire"), "mute", 1.0, 1.0);
         assert!(r1.duplicate_listener.is_none());
         assert!(r2.duplicate_listener.is_none());

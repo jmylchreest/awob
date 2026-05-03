@@ -42,7 +42,10 @@ struct ProbeState {
 /// Probe Wayland outputs. Best-effort: silently returns empty on any
 /// failure so the caller's fallback path always wins.
 pub fn probe(timeout: Duration) -> HashMap<String, OutputInfo> {
-    let conn = match Connection::connect_to_env() { Ok(c) => c, Err(_) => return HashMap::new() };
+    let conn = match Connection::connect_to_env() {
+        Ok(c) => c,
+        Err(_) => return HashMap::new(),
+    };
     let display = conn.display();
     let mut event_queue: EventQueue<ProbeState> = conn.new_event_queue();
     let qh = event_queue.handle();
@@ -58,10 +61,16 @@ pub fn probe(timeout: Duration) -> HashMap<String, OutputInfo> {
     // need a second.
     let deadline = Instant::now() + timeout;
     while state.finalised.len() < state.expected && Instant::now() < deadline {
-        if event_queue.dispatch_pending(&mut state).is_err() { break; }
-        if event_queue.flush().is_err() { break; }
+        if event_queue.dispatch_pending(&mut state).is_err() {
+            break;
+        }
+        if event_queue.flush().is_err() {
+            break;
+        }
         std::thread::sleep(Duration::from_millis(20));
-        if event_queue.roundtrip(&mut state).is_err() { break; }
+        if event_queue.roundtrip(&mut state).is_err() {
+            break;
+        }
     }
 
     let mut out = HashMap::new();
@@ -82,7 +91,12 @@ impl Dispatch<wl_registry::WlRegistry, ()> for ProbeState {
         _: &Connection,
         qh: &QueueHandle<Self>,
     ) {
-        if let wl_registry::Event::Global { name, interface, version } = ev {
+        if let wl_registry::Event::Global {
+            name,
+            interface,
+            version,
+        } = ev
+        {
             if interface == wl_output::WlOutput::interface().name {
                 // Bind v4 if the compositor offers it; v4 added the `name`
                 // event which is exactly what we want. Older versions still

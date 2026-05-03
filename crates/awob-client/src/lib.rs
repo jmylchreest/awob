@@ -79,8 +79,13 @@ impl Client {
 
     /// Negotiate protocol version. Returns daemon version string on success.
     pub fn hello(&mut self) -> Result<String> {
-        match self.request(&Request::Hello { protocol: PROTOCOL_VERSION })? {
-            Response::Hello { protocol, daemon_version } => {
+        match self.request(&Request::Hello {
+            protocol: PROTOCOL_VERSION,
+        })? {
+            Response::Hello {
+                protocol,
+                daemon_version,
+            } => {
                 if protocol != PROTOCOL_VERSION {
                     return Err(Error::VersionMismatch {
                         client: PROTOCOL_VERSION,
@@ -114,7 +119,10 @@ impl Client {
     /// Set the active theme, optionally persisting the choice to
     /// `awob.toml` so it survives daemon restarts.
     pub fn set_theme_with(&mut self, name: impl Into<String>, persist: bool) -> Result<()> {
-        match self.request(&Request::SetTheme { name: name.into(), persist })? {
+        match self.request(&Request::SetTheme {
+            name: name.into(),
+            persist,
+        })? {
             Response::Ok => Ok(()),
             other => Err(Error::UnexpectedResponse(other)),
         }
@@ -139,7 +147,10 @@ impl Client {
 
     pub fn version(&mut self) -> Result<(String, u32)> {
         match self.request(&Request::Version)? {
-            Response::Version { daemon_version, protocol } => Ok((daemon_version, protocol)),
+            Response::Version {
+                daemon_version,
+                protocol,
+            } => Ok((daemon_version, protocol)),
             other => Err(Error::UnexpectedResponse(other)),
         }
     }
@@ -152,21 +163,50 @@ pub struct Send {
 
 impl Send {
     pub fn new(event: impl Into<String>, value: f64) -> Self {
-        Self { inner: SendPayload::new(event, value) }
+        Self {
+            inner: SendPayload::new(event, value),
+        }
     }
-    pub fn max(mut self, max: f64) -> Self { self.inner.max = max; self }
-    pub fn source(mut self, s: impl Into<String>) -> Self { self.inner.source = Some(s.into()); self }
-    pub fn listener_id(mut self, s: impl Into<String>) -> Self { self.inner.listener_id = Some(s.into()); self }
-    pub fn style(mut self, s: impl Into<String>) -> Self { self.inner.style = Some(s.into()); self }
-    pub fn accent(mut self, s: impl Into<String>) -> Self { self.inner.accent = Some(s.into()); self }
-    pub fn app(mut self, s: impl Into<String>) -> Self { self.inner.app = Some(s.into()); self }
-    pub fn icon(mut self, s: impl Into<String>) -> Self { self.inner.icon = Some(s.into()); self }
-    pub fn timeout_ms(mut self, t: u32) -> Self { self.inner.timeout_ms = Some(t); self }
+    pub fn max(mut self, max: f64) -> Self {
+        self.inner.max = max;
+        self
+    }
+    pub fn source(mut self, s: impl Into<String>) -> Self {
+        self.inner.source = Some(s.into());
+        self
+    }
+    pub fn listener_id(mut self, s: impl Into<String>) -> Self {
+        self.inner.listener_id = Some(s.into());
+        self
+    }
+    pub fn style(mut self, s: impl Into<String>) -> Self {
+        self.inner.style = Some(s.into());
+        self
+    }
+    pub fn accent(mut self, s: impl Into<String>) -> Self {
+        self.inner.accent = Some(s.into());
+        self
+    }
+    pub fn app(mut self, s: impl Into<String>) -> Self {
+        self.inner.app = Some(s.into());
+        self
+    }
+    pub fn icon(mut self, s: impl Into<String>) -> Self {
+        self.inner.icon = Some(s.into());
+        self
+    }
+    pub fn timeout_ms(mut self, t: u32) -> Self {
+        self.inner.timeout_ms = Some(t);
+        self
+    }
     /// Mark this send as user-interactive: it'll hot-swap the active OSD
     /// even if a different `(source, event)` is currently displayed.
     /// Right for volume/brightness/mic-mute key presses. Ambient sources
     /// (battery, network) leave this unset.
-    pub fn preempt(mut self, preempt: bool) -> Self { self.inner.preempt = preempt; self }
+    pub fn preempt(mut self, preempt: bool) -> Self {
+        self.inner.preempt = preempt;
+        self
+    }
 
     /// Fill in `listener_id` with the basename of the current executable
     /// (e.g. `"awob"`, `"awob-listener-pipewire"`) if it isn't already set.
@@ -183,7 +223,9 @@ impl Send {
         self
     }
 
-    pub fn build(self) -> SendPayload { self.inner }
+    pub fn build(self) -> SendPayload {
+        self.inner
+    }
 }
 
 #[cfg(test)]
@@ -227,10 +269,13 @@ mod tests {
                 assert_eq!(p.source.as_deref(), Some("test"));
                 Response::Ok
             }
-            _ => Response::Error { message: "expected Send".into() },
+            _ => Response::Error {
+                message: "expected Send".into(),
+            },
         });
         let mut c = Client::connect_to(&sock).unwrap();
-        c.send(Send::new("volume", 50.0).source("test").build()).unwrap();
+        c.send(Send::new("volume", 50.0).source("test").build())
+            .unwrap();
     }
 
     #[test]
@@ -240,7 +285,9 @@ mod tests {
                 protocol,
                 daemon_version: "0.0.1-test".into(),
             },
-            _ => Response::Error { message: "expected Hello".into() },
+            _ => Response::Error {
+                message: "expected Hello".into(),
+            },
         });
         let mut c = Client::connect_to(&sock).unwrap();
         assert_eq!(c.hello().unwrap(), "0.0.1-test");
@@ -248,7 +295,9 @@ mod tests {
 
     #[test]
     fn daemon_error_propagates() {
-        let sock = spawn_mock(|_| Response::Error { message: "no theme".into() });
+        let sock = spawn_mock(|_| Response::Error {
+            message: "no theme".into(),
+        });
         let mut c = Client::connect_to(&sock).unwrap();
         let err = c.send(Send::new("v", 1.0).build()).unwrap_err();
         assert!(matches!(err, Error::Daemon(m) if m == "no theme"));

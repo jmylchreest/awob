@@ -21,7 +21,9 @@ pub struct TextRenderer {
 }
 
 impl Default for TextRenderer {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl TextRenderer {
@@ -58,8 +60,7 @@ impl TextRenderer {
     ) {
         let mut buffer = self.shape(text, font_spec);
         buffer.shape_until_scroll(&mut self.font_system, false);
-        let cosmic_color =
-            cosmic_text::Color::rgba(colour.r, colour.g, colour.b, colour.a);
+        let cosmic_color = cosmic_text::Color::rgba(colour.r, colour.g, colour.b, colour.a);
         let pm_w = pm.width() as i32;
         let pm_h = pm.height() as i32;
         let stride = pm_w * 4;
@@ -73,32 +74,38 @@ impl TextRenderer {
             cosmic_color,
             |gx, gy, gw, gh, gcolor| {
                 let (cr, cg, cb, ca) = (gcolor.r(), gcolor.g(), gcolor.b(), gcolor.a());
-                if ca == 0 { return; }
+                if ca == 0 {
+                    return;
+                }
                 let max_dx = gw.max(1) as i32;
                 let max_dy = gh.max(1) as i32;
                 for dy in 0..max_dy {
                     let py = oy + gy + dy;
-                    if py < 0 || py >= pm_h { continue; }
+                    if py < 0 || py >= pm_h {
+                        continue;
+                    }
                     for dx in 0..max_dx {
                         let px = ox + gx + dx;
-                        if px < 0 || px >= pm_w { continue; }
+                        if px < 0 || px >= pm_w {
+                            continue;
+                        }
                         let idx = (py * stride + px * 4) as usize;
                         // Source-over alpha blend, premultiplied math.
                         let s_a = ca as u32;
                         let inv = 255 - s_a;
-                        let dr = pm_data[idx]   as u32;
-                        let dg = pm_data[idx+1] as u32;
-                        let db = pm_data[idx+2] as u32;
-                        let da = pm_data[idx+3] as u32;
+                        let dr = pm_data[idx] as u32;
+                        let dg = pm_data[idx + 1] as u32;
+                        let db = pm_data[idx + 2] as u32;
+                        let da = pm_data[idx + 3] as u32;
                         // cosmic_text gives straight (non-premultiplied) RGBA.
                         // Convert to premultiplied for compositing.
                         let s_r = (cr as u32 * s_a) / 255;
                         let s_g = (cg as u32 * s_a) / 255;
                         let s_b = (cb as u32 * s_a) / 255;
-                        pm_data[idx]   = (s_r + dr * inv / 255) as u8;
-                        pm_data[idx+1] = (s_g + dg * inv / 255) as u8;
-                        pm_data[idx+2] = (s_b + db * inv / 255) as u8;
-                        pm_data[idx+3] = (s_a + da * inv / 255) as u8;
+                        pm_data[idx] = (s_r + dr * inv / 255) as u8;
+                        pm_data[idx + 1] = (s_g + dg * inv / 255) as u8;
+                        pm_data[idx + 2] = (s_b + db * inv / 255) as u8;
+                        pm_data[idx + 3] = (s_a + da * inv / 255) as u8;
                     }
                 }
             },
@@ -125,7 +132,11 @@ impl TextRenderer {
         let attrs = Attrs::new()
             .family(family)
             .weight(Weight(spec.weight))
-            .style(if spec.italic { Style::Italic } else { Style::Normal });
+            .style(if spec.italic {
+                Style::Italic
+            } else {
+                Style::Normal
+            });
         buffer.set_size(&mut self.font_system, Some(10_000.0), Some(spec.size * 4.0));
         buffer.set_text(&mut self.font_system, text, attrs, Shaping::Advanced);
         buffer
@@ -142,7 +153,12 @@ pub struct FontSpec {
 
 impl Default for FontSpec {
     fn default() -> Self {
-        Self { family: "sans-serif".into(), size: 14.0, weight: 400, italic: false }
+        Self {
+            family: "sans-serif".into(),
+            size: 14.0,
+            weight: 400,
+            italic: false,
+        }
     }
 }
 
@@ -163,16 +179,30 @@ impl FontSpec {
         let mut family_parts: Vec<&str> = Vec::new();
         for token in s.split_whitespace() {
             let lower = token.to_ascii_lowercase();
-            if lower == "italic" || lower == "oblique" { italic = true; continue; }
-            if lower == "normal" || lower == "upright" { italic = false; continue; }
-            if let Some(w) = weight_alias(&lower) { weight = w; continue; }
+            if lower == "italic" || lower == "oblique" {
+                italic = true;
+                continue;
+            }
+            if lower == "normal" || lower == "upright" {
+                italic = false;
+                continue;
+            }
+            if let Some(w) = weight_alias(&lower) {
+                weight = w;
+                continue;
+            }
             if let Ok(n) = token.parse::<u16>() {
                 if (100..=900).contains(&n) && (n % 100 == 0 || n == 350 || n == 950) {
-                    weight = n; continue;
+                    weight = n;
+                    continue;
                 }
-                size = n as f32; continue;
+                size = n as f32;
+                continue;
             }
-            if let Ok(f) = token.parse::<f32>() { size = f; continue; }
+            if let Ok(f) = token.parse::<f32>() {
+                size = f;
+                continue;
+            }
             family_parts.push(token);
         }
         let family = if family_parts.is_empty() {
@@ -180,21 +210,26 @@ impl FontSpec {
         } else {
             family_parts.join(" ")
         };
-        Self { family, size, weight, italic }
+        Self {
+            family,
+            size,
+            weight,
+            italic,
+        }
     }
 }
 
 fn weight_alias(s: &str) -> Option<u16> {
     Some(match s {
-        "thin" | "hairline"             => 100,
-        "extralight" | "ultralight"     => 200,
-        "light"                         => 300,
-        "regular" | "normal-weight"     => 400,
-        "medium"                        => 500,
-        "semibold" | "demibold"         => 600,
-        "bold"                          => 700,
-        "extrabold" | "ultrabold"       => 800,
-        "black" | "heavy"               => 900,
+        "thin" | "hairline" => 100,
+        "extralight" | "ultralight" => 200,
+        "light" => 300,
+        "regular" | "normal-weight" => 400,
+        "medium" => 500,
+        "semibold" | "demibold" => 600,
+        "bold" => 700,
+        "extrabold" | "ultrabold" => 800,
+        "black" | "heavy" => 900,
         _ => return None,
     })
 }
@@ -203,32 +238,37 @@ fn weight_alias(s: &str) -> Option<u16> {
 mod tests {
     use super::*;
 
-    #[test] fn parse_family_size_weight() {
+    #[test]
+    fn parse_family_size_weight() {
         let f = FontSpec::parse("Inter 14 500");
         assert_eq!(f.family, "Inter");
         assert_eq!(f.size, 14.0);
         assert_eq!(f.weight, 500);
     }
-    #[test] fn parse_family_size() {
+    #[test]
+    fn parse_family_size() {
         let f = FontSpec::parse("Inter 16");
         assert_eq!(f.family, "Inter");
         assert_eq!(f.size, 16.0);
         assert_eq!(f.weight, 400);
     }
-    #[test] fn parse_multi_word_family() {
+    #[test]
+    fn parse_multi_word_family() {
         let f = FontSpec::parse("DejaVu Sans 12 700");
         assert_eq!(f.family, "DejaVu Sans");
         assert_eq!(f.size, 12.0);
         assert_eq!(f.weight, 700);
     }
-    #[test] fn parse_only_family() {
+    #[test]
+    fn parse_only_family() {
         let f = FontSpec::parse("Inter");
         assert_eq!(f.family, "Inter");
         assert_eq!(f.size, 14.0);
         assert_eq!(f.weight, 400);
         assert!(!f.italic);
     }
-    #[test] fn parse_italic_anywhere() {
+    #[test]
+    fn parse_italic_anywhere() {
         let f = FontSpec::parse("Inter italic 14");
         assert_eq!(f.family, "Inter");
         assert_eq!(f.size, 14.0);
@@ -237,7 +277,8 @@ mod tests {
         assert_eq!(f.family, "DejaVu Sans");
         assert!(f.italic);
     }
-    #[test] fn parse_weight_aliases() {
+    #[test]
+    fn parse_weight_aliases() {
         assert_eq!(FontSpec::parse("Inter 14 bold").weight, 700);
         assert_eq!(FontSpec::parse("Inter 14 light").weight, 300);
         assert_eq!(FontSpec::parse("DejaVu medium 12").weight, 500);

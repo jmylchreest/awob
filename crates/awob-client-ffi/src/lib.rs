@@ -33,22 +33,31 @@ pub const AWOB_ERR_DAEMON: c_int = 5;
 pub const AWOB_PROTOCOL_VERSION: u32 = awob_client::PROTOCOL_VERSION;
 pub const AWOB_ABI_VERSION: u32 = 0;
 
-pub struct awob_client_t { inner: Client }
-pub struct awob_send_t { inner: Send }
+pub struct awob_client_t {
+    inner: Client,
+}
+pub struct awob_send_t {
+    inner: Send,
+}
 
 thread_local! {
     static LAST_ERROR: RefCell<Option<CString>> = const { RefCell::new(None) };
 }
 
 fn set_last_error(msg: impl Into<String>) {
-    let s = CString::new(msg.into()).unwrap_or_else(|_| CString::new("invalid error message").unwrap());
+    let s =
+        CString::new(msg.into()).unwrap_or_else(|_| CString::new("invalid error message").unwrap());
     LAST_ERROR.with(|e| *e.borrow_mut() = Some(s));
 }
 
-fn clear_last_error() { LAST_ERROR.with(|e| *e.borrow_mut() = None); }
+fn clear_last_error() {
+    LAST_ERROR.with(|e| *e.borrow_mut() = None);
+}
 
 unsafe fn cstr_to_string(p: *const c_char) -> Option<String> {
-    if p.is_null() { return None; }
+    if p.is_null() {
+        return None;
+    }
     Some(unsafe { CStr::from_ptr(p) }.to_string_lossy().into_owned())
 }
 
@@ -65,11 +74,15 @@ pub extern "C" fn awob_last_error() -> *const c_char {
 
 /// Returns the wire protocol version this build implements.
 #[unsafe(no_mangle)]
-pub extern "C" fn awob_protocol_version() -> u32 { AWOB_PROTOCOL_VERSION }
+pub extern "C" fn awob_protocol_version() -> u32 {
+    AWOB_PROTOCOL_VERSION
+}
 
 /// Returns the ABI version of this shared library.
 #[unsafe(no_mangle)]
-pub extern "C" fn awob_abi_version() -> u32 { AWOB_ABI_VERSION }
+pub extern "C" fn awob_abi_version() -> u32 {
+    AWOB_ABI_VERSION
+}
 
 /// Connect to the daemon at the default socket path
 /// (`$XDG_RUNTIME_DIR/awob.sock`). Returns NULL on failure; check
@@ -79,7 +92,10 @@ pub extern "C" fn awob_connect() -> *mut awob_client_t {
     clear_last_error();
     match Client::connect() {
         Ok(c) => Box::into_raw(Box::new(awob_client_t { inner: c })),
-        Err(e) => { set_last_error(e.to_string()); ptr::null_mut() }
+        Err(e) => {
+            set_last_error(e.to_string());
+            ptr::null_mut()
+        }
     }
 }
 
@@ -94,14 +110,21 @@ pub extern "C" fn awob_connect_to(socket_path: *const c_char) -> *mut awob_clien
     };
     match Client::connect_to(Path::new(&path)) {
         Ok(c) => Box::into_raw(Box::new(awob_client_t { inner: c })),
-        Err(e) => { set_last_error(e.to_string()); ptr::null_mut() }
+        Err(e) => {
+            set_last_error(e.to_string());
+            ptr::null_mut()
+        }
     }
 }
 
 /// Free a client handle previously returned by `awob_connect*`.
 #[unsafe(no_mangle)]
 pub extern "C" fn awob_client_free(client: *mut awob_client_t) {
-    if !client.is_null() { unsafe { drop(Box::from_raw(client)); } }
+    if !client.is_null() {
+        unsafe {
+            drop(Box::from_raw(client));
+        }
+    }
 }
 
 /// Allocate a new send builder. `event` is required; `value` is the numeric
@@ -114,13 +137,19 @@ pub extern "C" fn awob_send_new(event: *const c_char, value: f64) -> *mut awob_s
         set_last_error("event is null");
         return ptr::null_mut();
     };
-    Box::into_raw(Box::new(awob_send_t { inner: Send::new(ev, value) }))
+    Box::into_raw(Box::new(awob_send_t {
+        inner: Send::new(ev, value),
+    }))
 }
 
 /// Free a send builder without dispatching.
 #[unsafe(no_mangle)]
 pub extern "C" fn awob_send_free(send: *mut awob_send_t) {
-    if !send.is_null() { unsafe { drop(Box::from_raw(send)); } }
+    if !send.is_null() {
+        unsafe {
+            drop(Box::from_raw(send));
+        }
+    }
 }
 
 macro_rules! define_string_setter {
@@ -128,29 +157,36 @@ macro_rules! define_string_setter {
         #[unsafe(no_mangle)]
         pub extern "C" fn $fn_name(send: *mut awob_send_t, value: *const c_char) -> c_int {
             clear_last_error();
-            if send.is_null() { set_last_error("send is null"); return AWOB_ERR_BAD_ARG; }
+            if send.is_null() {
+                set_last_error("send is null");
+                return AWOB_ERR_BAD_ARG;
+            }
             let Some(s) = (unsafe { cstr_to_string(value) }) else {
-                set_last_error("value is null"); return AWOB_ERR_BAD_ARG;
+                set_last_error("value is null");
+                return AWOB_ERR_BAD_ARG;
             };
             let send = unsafe { &mut *send };
             let inner = std::mem::replace(&mut send.inner, Send::new("", 0.0));
             send.inner = inner.$method(s);
             AWOB_OK
         }
-    }
+    };
 }
 
 define_string_setter!(awob_send_set_source, source);
-define_string_setter!(awob_send_set_style,  style);
+define_string_setter!(awob_send_set_style, style);
 define_string_setter!(awob_send_set_accent, accent);
-define_string_setter!(awob_send_set_app,    app);
-define_string_setter!(awob_send_set_icon,   icon);
+define_string_setter!(awob_send_set_app, app);
+define_string_setter!(awob_send_set_icon, icon);
 
 /// Set `max` on the builder.
 #[unsafe(no_mangle)]
 pub extern "C" fn awob_send_set_max(send: *mut awob_send_t, max: f64) -> c_int {
     clear_last_error();
-    if send.is_null() { set_last_error("send is null"); return AWOB_ERR_BAD_ARG; }
+    if send.is_null() {
+        set_last_error("send is null");
+        return AWOB_ERR_BAD_ARG;
+    }
     let send = unsafe { &mut *send };
     let inner = std::mem::replace(&mut send.inner, Send::new("", 0.0));
     send.inner = inner.max(max);
@@ -161,7 +197,10 @@ pub extern "C" fn awob_send_set_max(send: *mut awob_send_t, max: f64) -> c_int {
 #[unsafe(no_mangle)]
 pub extern "C" fn awob_send_set_timeout_ms(send: *mut awob_send_t, ms: u32) -> c_int {
     clear_last_error();
-    if send.is_null() { set_last_error("send is null"); return AWOB_ERR_BAD_ARG; }
+    if send.is_null() {
+        set_last_error("send is null");
+        return AWOB_ERR_BAD_ARG;
+    }
     let send = unsafe { &mut *send };
     let inner = std::mem::replace(&mut send.inner, Send::new("", 0.0));
     send.inner = inner.timeout_ms(ms);
@@ -174,8 +213,14 @@ pub extern "C" fn awob_send_set_timeout_ms(send: *mut awob_send_t, ms: u32) -> c
 #[unsafe(no_mangle)]
 pub extern "C" fn awob_send_dispatch(client: *mut awob_client_t, send: *mut awob_send_t) -> c_int {
     clear_last_error();
-    if client.is_null() { set_last_error("client is null"); return AWOB_ERR_BAD_ARG; }
-    if send.is_null() { set_last_error("send is null"); return AWOB_ERR_BAD_ARG; }
+    if client.is_null() {
+        set_last_error("client is null");
+        return AWOB_ERR_BAD_ARG;
+    }
+    if send.is_null() {
+        set_last_error("send is null");
+        return AWOB_ERR_BAD_ARG;
+    }
     let client = unsafe { &mut *client };
     let send = unsafe { Box::from_raw(send) };
     match client.inner.send(send.inner.build()) {
@@ -183,7 +228,9 @@ pub extern "C" fn awob_send_dispatch(client: *mut awob_client_t, send: *mut awob
         Err(e) => {
             let code = match &e {
                 awob_client::Error::Io(_) => AWOB_ERR_IO,
-                awob_client::Error::SocketMissing(_) | awob_client::Error::NoRuntimeDir => AWOB_ERR_CONNECT,
+                awob_client::Error::SocketMissing(_) | awob_client::Error::NoRuntimeDir => {
+                    AWOB_ERR_CONNECT
+                }
                 awob_client::Error::Daemon(_) => AWOB_ERR_DAEMON,
                 _ => AWOB_ERR_PROTOCOL,
             };
@@ -198,11 +245,17 @@ pub extern "C" fn awob_send_dispatch(client: *mut awob_client_t, send: *mut awob
 #[unsafe(no_mangle)]
 pub extern "C" fn awob_hello(client: *mut awob_client_t) -> c_int {
     clear_last_error();
-    if client.is_null() { set_last_error("client is null"); return AWOB_ERR_BAD_ARG; }
+    if client.is_null() {
+        set_last_error("client is null");
+        return AWOB_ERR_BAD_ARG;
+    }
     let client = unsafe { &mut *client };
     match client.inner.hello() {
         Ok(_) => AWOB_OK,
-        Err(e) => { set_last_error(e.to_string()); AWOB_ERR_PROTOCOL }
+        Err(e) => {
+            set_last_error(e.to_string());
+            AWOB_ERR_PROTOCOL
+        }
     }
 }
 

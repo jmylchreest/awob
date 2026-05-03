@@ -22,7 +22,10 @@ use notify::{Event, EventKind, RecursiveMode, Watcher};
 /// listener so two keyboards don't collide in the daemon's history map and
 /// don't trigger duplicate-listener warnings.
 fn listener_id_for(device: &str) -> String {
-    format!("awob-listener-keyboard-backlight-{}", sanitise_device(device))
+    format!(
+        "awob-listener-keyboard-backlight-{}",
+        sanitise_device(device)
+    )
 }
 
 fn sanitise_device(name: &str) -> String {
@@ -58,12 +61,20 @@ struct Cli {
 /// index of a given device is stable across reboots.
 fn all_keyboard_devices() -> Vec<PathBuf> {
     let root = Path::new("/sys/class/leds");
-    let entries = match std::fs::read_dir(root) { Ok(e) => e, Err(_) => return Vec::new() };
-    let mut out: Vec<PathBuf> = entries.flatten()
+    let entries = match std::fs::read_dir(root) {
+        Ok(e) => e,
+        Err(_) => return Vec::new(),
+    };
+    let mut out: Vec<PathBuf> = entries
+        .flatten()
         .map(|e| e.path())
         .filter(|p| p.join("brightness").exists())
         .filter(|p| {
-            let n = p.file_name().and_then(|s| s.to_str()).unwrap_or("").to_ascii_lowercase();
+            let n = p
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("")
+                .to_ascii_lowercase();
             n.contains("kbd") || n.contains("keyboard")
         })
         .collect();
@@ -72,9 +83,13 @@ fn all_keyboard_devices() -> Vec<PathBuf> {
 }
 
 fn friendly_label(device_path: &Path, override_label: Option<&String>) -> String {
-    if let Some(s) = override_label { return s.clone(); }
+    if let Some(s) = override_label {
+        return s.clone();
+    }
     let all = all_keyboard_devices();
-    if all.len() <= 1 { return "Keyboard".into(); }
+    if all.len() <= 1 {
+        return "Keyboard".into();
+    }
     let idx = all.iter().position(|p| p == device_path).unwrap_or(0);
     format!("Keyboard {}", idx + 1)
 }
@@ -85,7 +100,9 @@ fn discover_device() -> Option<PathBuf> {
 
 fn read_u32(p: &Path) -> std::io::Result<u32> {
     let s = std::fs::read_to_string(p)?;
-    s.trim().parse().map_err(|e| std::io::Error::other(format!("parse {}: {e}", p.display())))
+    s.trim()
+        .parse()
+        .map_err(|e| std::io::Error::other(format!("parse {}: {e}", p.display())))
 }
 
 fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
@@ -99,9 +116,14 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     if !brightness_path.exists() {
         return Err(format!("brightness file not found at {}", brightness_path.display()).into());
     }
-    let device_name = dir.file_name().map(|n| n.to_string_lossy().into_owned())
+    let device_name = dir
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| "kbd-backlight".into());
-    let source = cli.source.clone().unwrap_or_else(|| sanitise_device(&device_name));
+    let source = cli
+        .source
+        .clone()
+        .unwrap_or_else(|| sanitise_device(&device_name));
     let label = friendly_label(&dir, cli.label.as_ref());
 
     eprintln!(
@@ -125,11 +147,15 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     let mut last = initial;
     let debounce = Duration::from_millis(40);
     loop {
-        if rx.recv().is_err() { break; }
+        if rx.recv().is_err() {
+            break;
+        }
         std::thread::sleep(debounce);
         while rx.try_recv().is_ok() {}
         let current = read_u32(&brightness_path).unwrap_or(last as u32) as f64;
-        if (current - last).abs() < f64::EPSILON { continue; }
+        if (current - last).abs() < f64::EPSILON {
+            continue;
+        }
         last = current;
         let _ = send_to_daemon(&cli.socket, &source, &device_name, &label, current, max);
     }
@@ -163,7 +189,10 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
     match run(cli) {
         Ok(()) => ExitCode::SUCCESS,
-        Err(e) => { eprintln!("awob-listener-keyboard-backlight: {e}"); ExitCode::from(1) }
+        Err(e) => {
+            eprintln!("awob-listener-keyboard-backlight: {e}");
+            ExitCode::from(1)
+        }
     }
 }
 

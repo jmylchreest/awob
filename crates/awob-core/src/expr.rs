@@ -34,7 +34,19 @@ pub enum Expr {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BinOp { Add, Sub, Mul, Div, Mod, Eq, Ne, Lt, Le, Gt, Ge }
+pub enum BinOp {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Mod,
+    Eq,
+    Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum ExprError {
@@ -51,7 +63,10 @@ pub fn parse(s: &str) -> Result<Expr, ExprError> {
     let e = p.parse_ternary()?;
     p.skip_ws();
     if p.pos < p.src.len() {
-        return Err(ExprError::Parse { msg: format!("unexpected `{}`", &p.src[p.pos..]), pos: p.pos });
+        return Err(ExprError::Parse {
+            msg: format!("unexpected `{}`", &p.src[p.pos..]),
+            pos: p.pos,
+        });
     }
     Ok(e)
 }
@@ -71,10 +86,15 @@ pub fn eval(e: &Expr, b: &Bindings) -> Result<Value, ExprError> {
             if av.is_null() { eval(fb, b)? } else { av }
         }
         Expr::Tern(c, t, f) => {
-            if eval(c, b)?.truthy() { eval(t, b)? } else { eval(f, b)? }
+            if eval(c, b)?.truthy() {
+                eval(t, b)?
+            } else {
+                eval(f, b)?
+            }
         }
         Expr::Bin(op, l, r) => {
-            let lv = eval(l, b)?; let rv = eval(r, b)?;
+            let lv = eval(l, b)?;
+            let rv = eval(r, b)?;
             apply_binop(*op, lv, rv)?
         }
         Expr::Call(name, args) => call_builtin(name, args, b)?,
@@ -84,26 +104,58 @@ pub fn eval(e: &Expr, b: &Bindings) -> Result<Value, ExprError> {
 fn apply_binop(op: BinOp, l: Value, r: Value) -> Result<Value, ExprError> {
     use BinOp::*;
     let nums = || -> Result<(f64, f64), ExprError> {
-        let ln = l.as_number().ok_or_else(|| ExprError::Type(format!("not a number: {l:?}")))?;
-        let rn = r.as_number().ok_or_else(|| ExprError::Type(format!("not a number: {r:?}")))?;
+        let ln = l
+            .as_number()
+            .ok_or_else(|| ExprError::Type(format!("not a number: {l:?}")))?;
+        let rn = r
+            .as_number()
+            .ok_or_else(|| ExprError::Type(format!("not a number: {r:?}")))?;
         Ok((ln, rn))
     };
     Ok(match op {
         Add => match (&l, &r) {
-            (Value::String(_), _) | (_, Value::String(_)) =>
-                Value::String(format!("{}{}", l.as_string(), r.as_string())),
-            _ => { let (a, b) = nums()?; Value::Number(a + b) }
+            (Value::String(_), _) | (_, Value::String(_)) => {
+                Value::String(format!("{}{}", l.as_string(), r.as_string()))
+            }
+            _ => {
+                let (a, b) = nums()?;
+                Value::Number(a + b)
+            }
         },
-        Sub => { let (a, b) = nums()?; Value::Number(a - b) }
-        Mul => { let (a, b) = nums()?; Value::Number(a * b) }
-        Div => { let (a, b) = nums()?; Value::Number(if b == 0.0 { 0.0 } else { a / b }) }
-        Mod => { let (a, b) = nums()?; Value::Number(if b == 0.0 { 0.0 } else { a % b }) }
+        Sub => {
+            let (a, b) = nums()?;
+            Value::Number(a - b)
+        }
+        Mul => {
+            let (a, b) = nums()?;
+            Value::Number(a * b)
+        }
+        Div => {
+            let (a, b) = nums()?;
+            Value::Number(if b == 0.0 { 0.0 } else { a / b })
+        }
+        Mod => {
+            let (a, b) = nums()?;
+            Value::Number(if b == 0.0 { 0.0 } else { a % b })
+        }
         Eq => Value::Bool(l.as_string() == r.as_string()),
         Ne => Value::Bool(l.as_string() != r.as_string()),
-        Lt => { let (a, b) = nums()?; Value::Bool(a < b) }
-        Le => { let (a, b) = nums()?; Value::Bool(a <= b) }
-        Gt => { let (a, b) = nums()?; Value::Bool(a > b) }
-        Ge => { let (a, b) = nums()?; Value::Bool(a >= b) }
+        Lt => {
+            let (a, b) = nums()?;
+            Value::Bool(a < b)
+        }
+        Le => {
+            let (a, b) = nums()?;
+            Value::Bool(a <= b)
+        }
+        Gt => {
+            let (a, b) = nums()?;
+            Value::Bool(a > b)
+        }
+        Ge => {
+            let (a, b) = nums()?;
+            Value::Bool(a >= b)
+        }
     })
 }
 
@@ -120,8 +172,14 @@ fn call_builtin(name: &str, args: &[Expr], b: &Bindings) -> Result<Value, ExprEr
         }
         "clamp" => {
             let v = vs.first().and_then(Value::as_number).unwrap_or(0.0);
-            let lo = vs.get(1).and_then(Value::as_number).unwrap_or(f64::NEG_INFINITY);
-            let hi = vs.get(2).and_then(Value::as_number).unwrap_or(f64::INFINITY);
+            let lo = vs
+                .get(1)
+                .and_then(Value::as_number)
+                .unwrap_or(f64::NEG_INFINITY);
+            let hi = vs
+                .get(2)
+                .and_then(Value::as_number)
+                .unwrap_or(f64::INFINITY);
             Ok(Value::Number(v.clamp(lo, hi)))
         }
         "lerp" => {
@@ -130,12 +188,40 @@ fn call_builtin(name: &str, args: &[Expr], b: &Bindings) -> Result<Value, ExprEr
             let t = vs.get(2).and_then(Value::as_number).unwrap_or(0.0);
             Ok(Value::Number(a + (bv - a) * t))
         }
-        "min" => Ok(Value::Number(vs.iter().filter_map(Value::as_number).fold(f64::INFINITY, f64::min))),
-        "max" => Ok(Value::Number(vs.iter().filter_map(Value::as_number).fold(f64::NEG_INFINITY, f64::max))),
-        "int" => Ok(Value::Number(vs.first().and_then(Value::as_number).map(|n| n.trunc()).unwrap_or(0.0))),
-        "round" => Ok(Value::Number(vs.first().and_then(Value::as_number).map(f64::round).unwrap_or(0.0))),
-        "upper" => Ok(Value::String(vs.first().map(Value::as_string).unwrap_or_default().to_uppercase())),
-        "lower" => Ok(Value::String(vs.first().map(Value::as_string).unwrap_or_default().to_lowercase())),
+        "min" => Ok(Value::Number(
+            vs.iter()
+                .filter_map(Value::as_number)
+                .fold(f64::INFINITY, f64::min),
+        )),
+        "max" => Ok(Value::Number(
+            vs.iter()
+                .filter_map(Value::as_number)
+                .fold(f64::NEG_INFINITY, f64::max),
+        )),
+        "int" => Ok(Value::Number(
+            vs.first()
+                .and_then(Value::as_number)
+                .map(|n| n.trunc())
+                .unwrap_or(0.0),
+        )),
+        "round" => Ok(Value::Number(
+            vs.first()
+                .and_then(Value::as_number)
+                .map(f64::round)
+                .unwrap_or(0.0),
+        )),
+        "upper" => Ok(Value::String(
+            vs.first()
+                .map(Value::as_string)
+                .unwrap_or_default()
+                .to_uppercase(),
+        )),
+        "lower" => Ok(Value::String(
+            vs.first()
+                .map(Value::as_string)
+                .unwrap_or_default()
+                .to_lowercase(),
+        )),
         "capitalize" => {
             let s = vs.first().map(Value::as_string).unwrap_or_default();
             let mut chars = s.chars();
@@ -152,7 +238,10 @@ fn call_builtin(name: &str, args: &[Expr], b: &Bindings) -> Result<Value, ExprEr
             // the cut so total visible length may exceed n by suffix.len().
             let s = vs.first().map(Value::as_string).unwrap_or_default();
             let n = vs.get(1).and_then(Value::as_number).unwrap_or(0.0).max(0.0) as usize;
-            let suffix = vs.get(2).map(Value::as_string).unwrap_or_else(|| "\u{2026}".into());
+            let suffix = vs
+                .get(2)
+                .map(Value::as_string)
+                .unwrap_or_else(|| "\u{2026}".into());
             let total = s.chars().count();
             if total <= n {
                 Ok(Value::String(s))
@@ -201,7 +290,10 @@ pub struct Template {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-enum Segment { Literal(String), Expr(Expr) }
+enum Segment {
+    Literal(String),
+    Expr(Expr),
+}
 
 impl Template {
     pub fn parse(src: &str) -> Result<Self, ExprError> {
@@ -212,39 +304,60 @@ impl Template {
         while i < bytes.len() {
             let c = bytes[i];
             if c == b'{' && i + 1 < bytes.len() && bytes[i + 1] == b'{' {
-                lit.push('{'); i += 2;
+                lit.push('{');
+                i += 2;
             } else if c == b'}' && i + 1 < bytes.len() && bytes[i + 1] == b'}' {
-                lit.push('}'); i += 2;
+                lit.push('}');
+                i += 2;
             } else if c == b'{' {
-                if !lit.is_empty() { segs.push(Segment::Literal(std::mem::take(&mut lit))); }
-                let mut depth = 1; let start = i + 1; let mut j = start;
+                if !lit.is_empty() {
+                    segs.push(Segment::Literal(std::mem::take(&mut lit)));
+                }
+                let mut depth = 1;
+                let start = i + 1;
+                let mut j = start;
                 while j < bytes.len() {
                     match bytes[j] {
                         b'{' => depth += 1,
-                        b'}' => { depth -= 1; if depth == 0 { break; } }
+                        b'}' => {
+                            depth -= 1;
+                            if depth == 0 {
+                                break;
+                            }
+                        }
                         _ => {}
                     }
                     j += 1;
                 }
                 if depth != 0 {
-                    return Err(ExprError::Parse { msg: "unclosed `{`".into(), pos: i });
+                    return Err(ExprError::Parse {
+                        msg: "unclosed `{`".into(),
+                        pos: i,
+                    });
                 }
                 let inner = &src[start..j];
                 segs.push(Segment::Expr(parse(inner)?));
                 i = j + 1;
             } else if c == b'$' && i + 1 < bytes.len() && is_ident_start(bytes[i + 1] as char) {
-                if !lit.is_empty() { segs.push(Segment::Literal(std::mem::take(&mut lit))); }
+                if !lit.is_empty() {
+                    segs.push(Segment::Literal(std::mem::take(&mut lit)));
+                }
                 let start = i + 1;
                 let mut j = start;
-                while j < bytes.len() && is_ident_cont(bytes[j] as char) { j += 1; }
+                while j < bytes.len() && is_ident_cont(bytes[j] as char) {
+                    j += 1;
+                }
                 let name = src[start..j].to_string();
                 segs.push(Segment::Expr(Expr::Var(name)));
                 i = j;
             } else {
-                lit.push(c as char); i += 1;
+                lit.push(c as char);
+                i += 1;
             }
         }
-        if !lit.is_empty() { segs.push(Segment::Literal(lit)); }
+        if !lit.is_empty() {
+            segs.push(Segment::Literal(lit));
+        }
         Ok(Template { segments: segs })
     }
 
@@ -272,40 +385,65 @@ pub fn value_as_color(v: &Value, b: &Bindings) -> Option<Colour> {
     match v {
         Value::Colour(c) => Some(*c),
         Value::String(s) => {
-            if let Ok(c) = Colour::parse(s) { return Some(c); }
+            if let Ok(c) = Colour::parse(s) {
+                return Some(c);
+            }
             b.palette.get(s).copied()
         }
         _ => None,
     }
 }
 
-fn is_ident_start(c: char) -> bool { c.is_ascii_alphabetic() || c == '_' }
-fn is_ident_cont(c: char) -> bool { c.is_ascii_alphanumeric() || c == '_' || c == '-' }
+fn is_ident_start(c: char) -> bool {
+    c.is_ascii_alphabetic() || c == '_'
+}
+fn is_ident_cont(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '_' || c == '-'
+}
 
 // -- parser internals --
 
-struct Parser<'a> { src: &'a str, pos: usize }
+struct Parser<'a> {
+    src: &'a str,
+    pos: usize,
+}
 
 impl<'a> Parser<'a> {
-    fn peek(&self) -> Option<char> { self.src[self.pos..].chars().next() }
+    fn peek(&self) -> Option<char> {
+        self.src[self.pos..].chars().next()
+    }
     fn skip_ws(&mut self) {
         while let Some(c) = self.peek() {
-            if c.is_whitespace() { self.pos += c.len_utf8(); } else { break; }
+            if c.is_whitespace() {
+                self.pos += c.len_utf8();
+            } else {
+                break;
+            }
         }
     }
     fn eat(&mut self, s: &str) -> bool {
         self.skip_ws();
-        if self.src[self.pos..].starts_with(s) { self.pos += s.len(); true } else { false }
+        if self.src[self.pos..].starts_with(s) {
+            self.pos += s.len();
+            true
+        } else {
+            false
+        }
     }
     fn err(&self, msg: impl Into<String>) -> ExprError {
-        ExprError::Parse { msg: msg.into(), pos: self.pos }
+        ExprError::Parse {
+            msg: msg.into(),
+            pos: self.pos,
+        }
     }
 
     fn parse_ternary(&mut self) -> Result<Expr, ExprError> {
         let cond = self.parse_coalesce()?;
         if self.eat("?") {
             let t = self.parse_ternary()?;
-            if !self.eat(":") { return Err(self.err("expected `:` in ternary")); }
+            if !self.eat(":") {
+                return Err(self.err("expected `:` in ternary"));
+            }
             let f = self.parse_ternary()?;
             return Ok(Expr::Tern(Box::new(cond), Box::new(t), Box::new(f)));
         }
@@ -323,13 +461,21 @@ impl<'a> Parser<'a> {
 
     fn parse_compare(&mut self) -> Result<Expr, ExprError> {
         let l = self.parse_add()?;
-        let op = if self.eat("==") { Some(BinOp::Eq) }
-            else if self.eat("!=") { Some(BinOp::Ne) }
-            else if self.eat("<=") { Some(BinOp::Le) }
-            else if self.eat(">=") { Some(BinOp::Ge) }
-            else if self.eat("<") { Some(BinOp::Lt) }
-            else if self.eat(">") { Some(BinOp::Gt) }
-            else { None };
+        let op = if self.eat("==") {
+            Some(BinOp::Eq)
+        } else if self.eat("!=") {
+            Some(BinOp::Ne)
+        } else if self.eat("<=") {
+            Some(BinOp::Le)
+        } else if self.eat(">=") {
+            Some(BinOp::Ge)
+        } else if self.eat("<") {
+            Some(BinOp::Lt)
+        } else if self.eat(">") {
+            Some(BinOp::Gt)
+        } else {
+            None
+        };
         if let Some(op) = op {
             let r = self.parse_add()?;
             return Ok(Expr::Bin(op, Box::new(l), Box::new(r)));
@@ -340,11 +486,18 @@ impl<'a> Parser<'a> {
     fn parse_add(&mut self) -> Result<Expr, ExprError> {
         let mut l = self.parse_mul()?;
         loop {
-            let op = if self.eat("+") { Some(BinOp::Add) }
-                else if self.eat("-") { Some(BinOp::Sub) }
-                else { None };
+            let op = if self.eat("+") {
+                Some(BinOp::Add)
+            } else if self.eat("-") {
+                Some(BinOp::Sub)
+            } else {
+                None
+            };
             match op {
-                Some(o) => { let r = self.parse_mul()?; l = Expr::Bin(o, Box::new(l), Box::new(r)); }
+                Some(o) => {
+                    let r = self.parse_mul()?;
+                    l = Expr::Bin(o, Box::new(l), Box::new(r));
+                }
                 None => break,
             }
         }
@@ -354,12 +507,20 @@ impl<'a> Parser<'a> {
     fn parse_mul(&mut self) -> Result<Expr, ExprError> {
         let mut l = self.parse_unary()?;
         loop {
-            let op = if self.eat("*") { Some(BinOp::Mul) }
-                else if self.eat("/") { Some(BinOp::Div) }
-                else if self.eat("%") { Some(BinOp::Mod) }
-                else { None };
+            let op = if self.eat("*") {
+                Some(BinOp::Mul)
+            } else if self.eat("/") {
+                Some(BinOp::Div)
+            } else if self.eat("%") {
+                Some(BinOp::Mod)
+            } else {
+                None
+            };
             match op {
-                Some(o) => { let r = self.parse_unary()?; l = Expr::Bin(o, Box::new(l), Box::new(r)); }
+                Some(o) => {
+                    let r = self.parse_unary()?;
+                    l = Expr::Bin(o, Box::new(l), Box::new(r));
+                }
                 None => break,
             }
         }
@@ -368,18 +529,26 @@ impl<'a> Parser<'a> {
 
     fn parse_unary(&mut self) -> Result<Expr, ExprError> {
         self.skip_ws();
-        if self.eat("-") { return Ok(Expr::Neg(Box::new(self.parse_unary()?))); }
-        if self.eat("!") { return Ok(Expr::Not(Box::new(self.parse_unary()?))); }
+        if self.eat("-") {
+            return Ok(Expr::Neg(Box::new(self.parse_unary()?)));
+        }
+        if self.eat("!") {
+            return Ok(Expr::Not(Box::new(self.parse_unary()?)));
+        }
         self.parse_primary()
     }
 
     fn parse_primary(&mut self) -> Result<Expr, ExprError> {
         self.skip_ws();
-        let c = self.peek().ok_or_else(|| self.err("unexpected end of expression"))?;
+        let c = self
+            .peek()
+            .ok_or_else(|| self.err("unexpected end of expression"))?;
         if c == '(' {
             self.pos += 1;
             let e = self.parse_ternary()?;
-            if !self.eat(")") { return Err(self.err("expected `)`")); }
+            if !self.eat(")") {
+                return Err(self.err("expected `)`"));
+            }
             return Ok(e);
         }
         if c == '$' {
@@ -391,7 +560,9 @@ impl<'a> Parser<'a> {
             let mut s = String::new();
             while let Some(ch) = self.peek() {
                 self.pos += ch.len_utf8();
-                if ch == c { return Ok(Expr::Str(s)); }
+                if ch == c {
+                    return Ok(Expr::Str(s));
+                }
                 if ch == '\\' {
                     if let Some(esc) = self.peek() {
                         self.pos += esc.len_utf8();
@@ -413,8 +584,12 @@ impl<'a> Parser<'a> {
                 if !self.eat(")") {
                     loop {
                         args.push(self.parse_ternary()?);
-                        if self.eat(")") { break; }
-                        if !self.eat(",") { return Err(self.err("expected `,` or `)`")); }
+                        if self.eat(")") {
+                            break;
+                        }
+                        if !self.eat(",") {
+                            return Err(self.err("expected `,` or `)`"));
+                        }
                     }
                 }
                 return Ok(Expr::Call(ident, args));
@@ -432,9 +607,14 @@ impl<'a> Parser<'a> {
     fn parse_number(&mut self) -> Result<Expr, ExprError> {
         let start = self.pos;
         while let Some(c) = self.peek() {
-            if c.is_ascii_digit() || c == '.' { self.pos += 1; } else { break; }
+            if c.is_ascii_digit() || c == '.' {
+                self.pos += 1;
+            } else {
+                break;
+            }
         }
-        let n: f64 = self.src[start..self.pos].parse()
+        let n: f64 = self.src[start..self.pos]
+            .parse()
             .map_err(|_| self.err("bad number"))?;
         Ok(Expr::Number(n))
     }
@@ -442,10 +622,15 @@ impl<'a> Parser<'a> {
     fn parse_ident(&mut self) -> Result<String, ExprError> {
         let start = self.pos;
         while let Some(c) = self.peek() {
-            if c.is_ascii_alphanumeric() || c == '_' || c == '-' { self.pos += c.len_utf8(); }
-            else { break; }
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                self.pos += c.len_utf8();
+            } else {
+                break;
+            }
         }
-        if self.pos == start { return Err(self.err("expected identifier")); }
+        if self.pos == start {
+            return Err(self.err("expected identifier"));
+        }
         Ok(self.src[start..self.pos].to_string())
     }
 }
@@ -464,82 +649,142 @@ mod tests {
         b
     }
 
-    #[test] fn number() { assert_eq!(eval(&parse("42").unwrap(), &b()).unwrap(), Value::Number(42.0)); }
-    #[test] fn var() { assert_eq!(eval(&parse("$value").unwrap(), &b()).unwrap(), Value::Number(50.0)); }
-    #[test] fn arith() {
-        assert_eq!(eval(&parse("$value / $max * 100").unwrap(), &b()).unwrap(), Value::Number(50.0));
+    #[test]
+    fn number() {
+        assert_eq!(
+            eval(&parse("42").unwrap(), &b()).unwrap(),
+            Value::Number(42.0)
+        );
     }
-    #[test] fn coalesce() {
-        assert_eq!(eval(&parse("$app ?? $event").unwrap(), &b()).unwrap(),
-                   Value::String("volume".into()));
+    #[test]
+    fn var() {
+        assert_eq!(
+            eval(&parse("$value").unwrap(), &b()).unwrap(),
+            Value::Number(50.0)
+        );
     }
-    #[test] fn ternary() {
-        assert_eq!(eval(&parse("$value > 0 ? $value : $max").unwrap(), &b()).unwrap(),
-                   Value::Number(50.0));
+    #[test]
+    fn arith() {
+        assert_eq!(
+            eval(&parse("$value / $max * 100").unwrap(), &b()).unwrap(),
+            Value::Number(50.0)
+        );
     }
-    #[test] fn builtin_icon() {
-        assert_eq!(eval(&parse("icon($event)").unwrap(), &b()).unwrap(),
-                   Value::String("audio-volume-high".into()));
+    #[test]
+    fn coalesce() {
+        assert_eq!(
+            eval(&parse("$app ?? $event").unwrap(), &b()).unwrap(),
+            Value::String("volume".into())
+        );
     }
-    #[test] fn builtin_upper() {
-        assert_eq!(eval(&parse("upper(\"volume\")").unwrap(), &b()).unwrap(),
-            Value::String("VOLUME".into()));
+    #[test]
+    fn ternary() {
+        assert_eq!(
+            eval(&parse("$value > 0 ? $value : $max").unwrap(), &b()).unwrap(),
+            Value::Number(50.0)
+        );
     }
-    #[test] fn builtin_lower() {
-        assert_eq!(eval(&parse("lower(\"VoLuMe\")").unwrap(), &b()).unwrap(),
-            Value::String("volume".into()));
+    #[test]
+    fn builtin_icon() {
+        assert_eq!(
+            eval(&parse("icon($event)").unwrap(), &b()).unwrap(),
+            Value::String("audio-volume-high".into())
+        );
     }
-    #[test] fn builtin_capitalize() {
-        assert_eq!(eval(&parse("capitalize(\"volume\")").unwrap(), &b()).unwrap(),
-            Value::String("Volume".into()));
+    #[test]
+    fn builtin_upper() {
+        assert_eq!(
+            eval(&parse("upper(\"volume\")").unwrap(), &b()).unwrap(),
+            Value::String("VOLUME".into())
+        );
+    }
+    #[test]
+    fn builtin_lower() {
+        assert_eq!(
+            eval(&parse("lower(\"VoLuMe\")").unwrap(), &b()).unwrap(),
+            Value::String("volume".into())
+        );
+    }
+    #[test]
+    fn builtin_capitalize() {
+        assert_eq!(
+            eval(&parse("capitalize(\"volume\")").unwrap(), &b()).unwrap(),
+            Value::String("Volume".into())
+        );
         // capitalize leaves the tail as-is (JS / Python `str.capitalize`
         // semantics, NOT title-case).
-        assert_eq!(eval(&parse("capitalize(\"vOLUME\")").unwrap(), &b()).unwrap(),
-            Value::String("VOLUME".into()));
+        assert_eq!(
+            eval(&parse("capitalize(\"vOLUME\")").unwrap(), &b()).unwrap(),
+            Value::String("VOLUME".into())
+        );
         // Empty string stays empty, doesn't panic.
-        assert_eq!(eval(&parse("capitalize(\"\")").unwrap(), &b()).unwrap(),
-            Value::String("".into()));
+        assert_eq!(
+            eval(&parse("capitalize(\"\")").unwrap(), &b()).unwrap(),
+            Value::String("".into())
+        );
     }
-    #[test] fn builtin_truncate() {
+    #[test]
+    fn builtin_truncate() {
         // No truncation needed.
-        assert_eq!(eval(&parse("truncate(\"volume\", 10)").unwrap(), &b()).unwrap(),
-            Value::String("volume".into()));
+        assert_eq!(
+            eval(&parse("truncate(\"volume\", 10)").unwrap(), &b()).unwrap(),
+            Value::String("volume".into())
+        );
         // Default suffix is the single-char ellipsis.
-        assert_eq!(eval(&parse("truncate(\"brightness\", 5)").unwrap(), &b()).unwrap(),
-            Value::String("brigh\u{2026}".into()));
+        assert_eq!(
+            eval(&parse("truncate(\"brightness\", 5)").unwrap(), &b()).unwrap(),
+            Value::String("brigh\u{2026}".into())
+        );
         // Custom suffix.
-        assert_eq!(eval(&parse("truncate(\"brightness\", 5, \"...\")").unwrap(), &b()).unwrap(),
-            Value::String("brigh...".into()));
+        assert_eq!(
+            eval(
+                &parse("truncate(\"brightness\", 5, \"...\")").unwrap(),
+                &b()
+            )
+            .unwrap(),
+            Value::String("brigh...".into())
+        );
         // Counts Unicode code points, not bytes.
-        assert_eq!(eval(&parse("truncate(\"héllo\", 4)").unwrap(), &b()).unwrap(),
-            Value::String("héll\u{2026}".into()));
+        assert_eq!(
+            eval(&parse("truncate(\"héllo\", 4)").unwrap(), &b()).unwrap(),
+            Value::String("héll\u{2026}".into())
+        );
     }
-    #[test] fn builtin_label() {
-        assert_eq!(eval(&parse("label($event)").unwrap(), &b()).unwrap(),
-                   Value::String("Volume".into()));
+    #[test]
+    fn builtin_label() {
+        assert_eq!(
+            eval(&parse("label($event)").unwrap(), &b()).unwrap(),
+            Value::String("Volume".into())
+        );
     }
-    #[test] fn template_literal() {
+    #[test]
+    fn template_literal() {
         let t = Template::parse("hello").unwrap();
         assert!(t.is_static());
         assert_eq!(t.render(&b()).unwrap(), "hello");
     }
-    #[test] fn template_interp() {
+    #[test]
+    fn template_interp() {
         let t = Template::parse("{$app ?? label($event)}").unwrap();
         assert_eq!(t.render(&b()).unwrap(), "Volume");
     }
-    #[test] fn template_mixed() {
+    #[test]
+    fn template_mixed() {
         let t = Template::parse("[{int($value)}/{int($max)}]").unwrap();
         assert_eq!(t.render(&b()).unwrap(), "[50/100]");
     }
-    #[test] fn template_bare_var() {
+    #[test]
+    fn template_bare_var() {
         let t = Template::parse("$value").unwrap();
         assert_eq!(t.render(&b()).unwrap(), "50");
     }
-    #[test] fn template_bare_var_in_text() {
+    #[test]
+    fn template_bare_var_in_text() {
         let t = Template::parse("v=$value m=$max").unwrap();
         assert_eq!(t.render(&b()).unwrap(), "v=50 m=100");
     }
-    #[test] fn template_dollar_dollar_escape() {
+    #[test]
+    fn template_dollar_dollar_escape() {
         // bare `$` not followed by ident is literal
         let t = Template::parse("$ alone").unwrap();
         assert_eq!(t.render(&b()).unwrap(), "$ alone");

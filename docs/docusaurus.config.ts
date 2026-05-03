@@ -44,11 +44,15 @@ const config: Config = {
 
   themes: [
     [
-      "@cmfcmf/docusaurus-search-local",
-      // Local-only search index (no external service). Built into the
-      // static site, so it works on GH Pages without further setup.
+      // @easyops-cn/docusaurus-search-local supports Docusaurus 3.x
+      // (the older @cmfcmf/docusaurus-search-local pins to v2). Local
+      // search, no external service required, ships with the static
+      // site and works on GH Pages out of the box.
+      "@easyops-cn/docusaurus-search-local",
       {
+        hashed: true,
         indexBlog: false,
+        docsRouteBasePath: "/",
       },
     ],
   ],

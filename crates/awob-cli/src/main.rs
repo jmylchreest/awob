@@ -87,22 +87,52 @@ fn connect(socket: Option<PathBuf>) -> Result<Client, awob_client::Error> {
 fn run(cli: Cli) -> Result<(), awob_client::Error> {
     let mut c = connect(cli.socket)?;
     match cli.cmd {
-        Cmd::Send { event, value, max, source, listener_id, style, accent, app, icon, timeout_ms, preempt } => {
+        Cmd::Send {
+            event,
+            value,
+            max,
+            source,
+            listener_id,
+            style,
+            accent,
+            app,
+            icon,
+            timeout_ms,
+            preempt,
+        } => {
             // Don't auto-set listener_id for the CLI — each `awob send`
             // invocation is a one-shot, not a long-running listener, and
             // many sends from different keybinds would trigger spurious
             // duplicate-listener warnings. Listener binaries set theirs
             // explicitly via `awob-client::Send::listener_id(...)`.
             let mut b = Send::new(event, value);
-            if let Some(s) = listener_id { b = b.listener_id(s); }
-            if let Some(m) = max { b = b.max(m); }
-            if let Some(s) = source { b = b.source(s); }
-            if let Some(s) = style { b = b.style(s); }
-            if let Some(s) = accent { b = b.accent(s); }
-            if let Some(s) = app { b = b.app(s); }
-            if let Some(s) = icon { b = b.icon(s); }
-            if let Some(t) = timeout_ms { b = b.timeout_ms(t); }
-            if preempt { b = b.preempt(true); }
+            if let Some(s) = listener_id {
+                b = b.listener_id(s);
+            }
+            if let Some(m) = max {
+                b = b.max(m);
+            }
+            if let Some(s) = source {
+                b = b.source(s);
+            }
+            if let Some(s) = style {
+                b = b.style(s);
+            }
+            if let Some(s) = accent {
+                b = b.accent(s);
+            }
+            if let Some(s) = app {
+                b = b.app(s);
+            }
+            if let Some(s) = icon {
+                b = b.icon(s);
+            }
+            if let Some(t) = timeout_ms {
+                b = b.timeout_ms(t);
+            }
+            if preempt {
+                b = b.preempt(true);
+            }
             c.send(b.build())
         }
         Cmd::Query { source } => {

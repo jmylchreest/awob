@@ -2,7 +2,6 @@
 
 use std::fmt;
 
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Colour {
     pub r: u8,
@@ -12,11 +11,25 @@ pub struct Colour {
 }
 
 impl Colour {
-    pub const BLACK: Colour = Colour { r: 0, g: 0, b: 0, a: 255 };
-    pub const TRANSPARENT: Colour = Colour { r: 0, g: 0, b: 0, a: 0 };
+    pub const BLACK: Colour = Colour {
+        r: 0,
+        g: 0,
+        b: 0,
+        a: 255,
+    };
+    pub const TRANSPARENT: Colour = Colour {
+        r: 0,
+        g: 0,
+        b: 0,
+        a: 0,
+    };
 
-    pub fn rgb(r: u8, g: u8, b: u8) -> Self { Self { r, g, b, a: 255 } }
-    pub fn rgba(r: u8, g: u8, b: u8, a: u8) -> Self { Self { r, g, b, a } }
+    pub fn rgb(r: u8, g: u8, b: u8) -> Self {
+        Self { r, g, b, a: 255 }
+    }
+    pub fn rgba(r: u8, g: u8, b: u8, a: u8) -> Self {
+        Self { r, g, b, a }
+    }
 
     /// Parse `#rgb`, `#rgba`, `#rrggbb`, `#rrggbbaa`, `rgb(r,g,b)`, `rgba(r,g,b,a)`.
     pub fn parse(s: &str) -> Result<Self, ColourError> {
@@ -71,13 +84,24 @@ fn parse_rgb_fn(args: &str, with_alpha: bool) -> Result<Colour, ColourError> {
     let parts: Vec<_> = args.split(',').map(str::trim).collect();
     let expected = if with_alpha { 4 } else { 3 };
     if parts.len() != expected {
-        return Err(ColourError::BadArgCount { want: expected, got: parts.len() });
+        return Err(ColourError::BadArgCount {
+            want: expected,
+            got: parts.len(),
+        });
     }
-    let r = parts[0].parse::<u32>().map_err(|_| ColourError::BadComponent(parts[0].into()))?;
-    let g = parts[1].parse::<u32>().map_err(|_| ColourError::BadComponent(parts[1].into()))?;
-    let b = parts[2].parse::<u32>().map_err(|_| ColourError::BadComponent(parts[2].into()))?;
+    let r = parts[0]
+        .parse::<u32>()
+        .map_err(|_| ColourError::BadComponent(parts[0].into()))?;
+    let g = parts[1]
+        .parse::<u32>()
+        .map_err(|_| ColourError::BadComponent(parts[1].into()))?;
+    let b = parts[2]
+        .parse::<u32>()
+        .map_err(|_| ColourError::BadComponent(parts[2].into()))?;
     let a = if with_alpha {
-        let av: f64 = parts[3].parse().map_err(|_| ColourError::BadComponent(parts[3].into()))?;
+        let av: f64 = parts[3]
+            .parse()
+            .map_err(|_| ColourError::BadComponent(parts[3].into()))?;
         if (0.0..=1.0).contains(&av) {
             (av * 255.0).round() as u32
         } else {
@@ -99,7 +123,11 @@ impl fmt::Display for Colour {
         if self.a == 255 {
             write!(f, "#{:02x}{:02x}{:02x}", self.r, self.g, self.b)
         } else {
-            write!(f, "#{:02x}{:02x}{:02x}{:02x}", self.r, self.g, self.b, self.a)
+            write!(
+                f,
+                "#{:02x}{:02x}{:02x}{:02x}",
+                self.r, self.g, self.b, self.a
+            )
         }
     }
 }
@@ -122,16 +150,44 @@ pub enum ColourError {
 mod tests {
     use super::*;
 
-    #[test] fn hex6() { assert_eq!(Colour::parse("#f3e8d7").unwrap(), Colour::rgb(0xf3, 0xe8, 0xd7)); }
-    #[test] fn hex8() { assert_eq!(Colour::parse("#1c1c23cc").unwrap(), Colour::rgba(0x1c, 0x1c, 0x23, 0xcc)); }
-    #[test] fn hex3() { assert_eq!(Colour::parse("#abc").unwrap(), Colour::rgb(0xaa, 0xbb, 0xcc)); }
-    #[test] fn rgba_floats() {
+    #[test]
+    fn hex6() {
+        assert_eq!(
+            Colour::parse("#f3e8d7").unwrap(),
+            Colour::rgb(0xf3, 0xe8, 0xd7)
+        );
+    }
+    #[test]
+    fn hex8() {
+        assert_eq!(
+            Colour::parse("#1c1c23cc").unwrap(),
+            Colour::rgba(0x1c, 0x1c, 0x23, 0xcc)
+        );
+    }
+    #[test]
+    fn hex3() {
+        assert_eq!(
+            Colour::parse("#abc").unwrap(),
+            Colour::rgb(0xaa, 0xbb, 0xcc)
+        );
+    }
+    #[test]
+    fn rgba_floats() {
         let c = Colour::parse("rgba(28,28,35,0.85)").unwrap();
-        assert_eq!(c.r, 28); assert_eq!(c.g, 28); assert_eq!(c.b, 35);
+        assert_eq!(c.r, 28);
+        assert_eq!(c.g, 28);
+        assert_eq!(c.b, 35);
         assert!((c.a as i16 - (0.85 * 255.0) as i16).abs() <= 1);
     }
-    #[test] fn rgb_int() {
-        assert_eq!(Colour::parse("rgb(255, 128, 0)").unwrap(), Colour::rgb(255, 128, 0));
+    #[test]
+    fn rgb_int() {
+        assert_eq!(
+            Colour::parse("rgb(255, 128, 0)").unwrap(),
+            Colour::rgb(255, 128, 0)
+        );
     }
-    #[test] fn bad() { assert!(Colour::parse("not a color").is_err()); }
+    #[test]
+    fn bad() {
+        assert!(Colour::parse("not a color").is_err());
+    }
 }

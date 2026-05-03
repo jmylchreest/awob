@@ -28,7 +28,10 @@ impl ThemeWatcher {
                 }
             }
         })?;
-        Ok(Self { inner, watching: Vec::new() })
+        Ok(Self {
+            inner,
+            watching: Vec::new(),
+        })
     }
 
     /// Replace the watch set. Returns the new (filtered) watch list.
@@ -46,7 +49,9 @@ impl ThemeWatcher {
         for p in paths {
             if let Some(parent) = p.parent() {
                 let parent = parent.to_path_buf();
-                if !dirs.iter().any(|d| d == &parent) { dirs.push(parent); }
+                if !dirs.iter().any(|d| d == &parent) {
+                    dirs.push(parent);
+                }
             }
         }
 

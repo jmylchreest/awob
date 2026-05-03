@@ -24,9 +24,11 @@ pub use colour::Colour;
 pub use expr::{Expr, ExprError, Template};
 pub use length::Length;
 pub use scene::{
-    Anchor, AttrValue, BarEl, Common, Edge, Element, ImageEl, Margin,
-    RectEl, Scene, Sized, Style, Surface, TextEl,
+    Anchor, AttrValue, BarEl, Common, Edge, Element, ImageEl, Margin, RectEl, Scene, Sized, Style,
+    Surface, TextEl,
 };
-pub use theme::{Theme, ThemeError, parse as parse_theme, parse_with_base as parse_theme_with_base, apply_style};
+pub use theme::{
+    Theme, ThemeError, apply_style, parse as parse_theme, parse_with_base as parse_theme_with_base,
+};
 
 pub use tiny_skia::Pixmap;

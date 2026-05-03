@@ -32,8 +32,7 @@ const FALLBACK_ICON_NAME: &str = "image-missing-symbolic";
 /// Embedded last-resort fallback. Rendered when neither the requested icon
 /// nor `image-missing-symbolic` could be found anywhere on the system.
 /// Symbolic so the icon resolver tints it to `$fg`.
-const EMBEDDED_FALLBACK_SVG: &[u8] =
-    include_bytes!("../embedded/image-missing-symbolic.svg");
+const EMBEDDED_FALLBACK_SVG: &[u8] = include_bytes!("../embedded/image-missing-symbolic.svg");
 
 #[derive(Debug, thiserror::Error)]
 pub enum IconError {
@@ -60,7 +59,9 @@ pub struct IconResolver {
 }
 
 impl IconResolver {
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     pub fn with_theme_dir(mut self, dir: Option<PathBuf>) -> Self {
         self.theme_dir = dir;
@@ -87,10 +88,15 @@ impl IconResolver {
     /// `-symbolic` suffix). The caller uses this to apply theme-foreground
     /// tinting automatically.
     pub fn resolve_with_meta(&mut self, src: &str, w: u32, h: u32) -> Option<(Pixmap, bool)> {
-        if src.is_empty() { return None; }
+        if src.is_empty() {
+            return None;
+        }
         let key = (src.to_string(), w, h);
         if let Some(p) = self.cache.get(&key) {
-            return Some((p.clone(), self.was_symbolic.get(&key).copied().unwrap_or(false)));
+            return Some((
+                p.clone(),
+                self.was_symbolic.get(&key).copied().unwrap_or(false),
+            ));
         }
         let (pm, sym) = self.rasterise_with_meta(src, w, h).ok()?;
         self.insert_cache(key.clone(), pm.clone(), sym);
@@ -179,7 +185,9 @@ impl IconResolver {
         } else {
             payload.as_bytes().to_vec()
         };
-        if bytes.len() > MAX_INLINE_BYTES { return Err(IconError::TooLarge); }
+        if bytes.len() > MAX_INLINE_BYTES {
+            return Err(IconError::TooLarge);
+        }
         if header.contains("svg") {
             rasterise_svg(&bytes, w, h)
         } else if header.contains("png") {
@@ -201,7 +209,9 @@ pub fn tint_pixmap(pm: &mut Pixmap, colour: crate::colour::Colour) {
     let data = pm.data_mut();
     for px in data.chunks_exact_mut(4) {
         let src_a = px[3] as u32;
-        if src_a == 0 { continue; }
+        if src_a == 0 {
+            continue;
+        }
         // Effective alpha = pre-existing alpha scaled by tint alpha.
         let out_a = (src_a * ca / 255).min(255);
         // Premultiplied output.
@@ -214,7 +224,9 @@ pub fn tint_pixmap(pm: &mut Pixmap, colour: crate::colour::Colour) {
 
 fn is_symbolic_path(p: &Path) -> bool {
     let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-    if stem.ends_with("-symbolic") { return true; }
+    if stem.ends_with("-symbolic") {
+        return true;
+    }
     let s = p.to_string_lossy();
     s.contains("/symbolic/")
 }
@@ -237,9 +249,13 @@ fn rasterise_svg(bytes: &[u8], w: u32, h: u32) -> Result<Pixmap, IconError> {
 
 fn rasterise_png<R: std::io::Read>(reader: R, w: u32, h: u32) -> Result<Pixmap, IconError> {
     let decoder = png::Decoder::new(reader);
-    let mut reader = decoder.read_info().map_err(|e| IconError::Png(e.to_string()))?;
+    let mut reader = decoder
+        .read_info()
+        .map_err(|e| IconError::Png(e.to_string()))?;
     let mut buf = vec![0; reader.output_buffer_size()];
-    let info = reader.next_frame(&mut buf).map_err(|e| IconError::Png(e.to_string()))?;
+    let info = reader
+        .next_frame(&mut buf)
+        .map_err(|e| IconError::Png(e.to_string()))?;
     let src_w = info.width;
     let src_h = info.height;
     let bytes_per_pixel = match info.color_type {
@@ -262,18 +278,29 @@ fn rasterise_png<R: std::io::Read>(reader: R, w: u32, h: u32) -> Result<Pixmap, 
             let src_idx = (sy * src_w + sx) as usize * bytes_per_pixel;
             let dst_idx = ty as usize * stride + tx as usize * 4;
             let (r, g, b, a) = match info.color_type {
-                png::ColorType::Rgba => (buf[src_idx], buf[src_idx+1], buf[src_idx+2], buf[src_idx+3]),
-                png::ColorType::Rgb  => (buf[src_idx], buf[src_idx+1], buf[src_idx+2], 255),
-                png::ColorType::Grayscale => { let g = buf[src_idx]; (g, g, g, 255) },
-                png::ColorType::GrayscaleAlpha => { let g = buf[src_idx]; (g, g, g, buf[src_idx+1]) },
+                png::ColorType::Rgba => (
+                    buf[src_idx],
+                    buf[src_idx + 1],
+                    buf[src_idx + 2],
+                    buf[src_idx + 3],
+                ),
+                png::ColorType::Rgb => (buf[src_idx], buf[src_idx + 1], buf[src_idx + 2], 255),
+                png::ColorType::Grayscale => {
+                    let g = buf[src_idx];
+                    (g, g, g, 255)
+                }
+                png::ColorType::GrayscaleAlpha => {
+                    let g = buf[src_idx];
+                    (g, g, g, buf[src_idx + 1])
+                }
                 _ => unreachable!(),
             };
             // Premultiply.
             let a = a as u32;
-            dst[dst_idx]   = (r as u32 * a / 255) as u8;
-            dst[dst_idx+1] = (g as u32 * a / 255) as u8;
-            dst[dst_idx+2] = (b as u32 * a / 255) as u8;
-            dst[dst_idx+3] = a as u8;
+            dst[dst_idx] = (r as u32 * a / 255) as u8;
+            dst[dst_idx + 1] = (g as u32 * a / 255) as u8;
+            dst[dst_idx + 2] = (b as u32 * a / 255) as u8;
+            dst[dst_idx + 3] = a as u8;
         }
     }
     Ok(pm)
@@ -285,21 +312,40 @@ fn base64_decode(s: &str) -> Result<Vec<u8>, ()> {
     let s = s.trim();
     let bytes = s.as_bytes();
     let len = bytes.len();
-    if len % 4 != 0 { return Err(()); }
+    if len % 4 != 0 {
+        return Err(());
+    }
     let mut out = Vec::with_capacity(len / 4 * 3);
     let mut i = 0;
     while i < len {
         let chunk: [i8; 4] = [
             TBL[bytes[i] as usize],
-            TBL[bytes[i+1] as usize],
-            if bytes[i+2] == b'=' { 0 } else { TBL[bytes[i+2] as usize] },
-            if bytes[i+3] == b'=' { 0 } else { TBL[bytes[i+3] as usize] },
+            TBL[bytes[i + 1] as usize],
+            if bytes[i + 2] == b'=' {
+                0
+            } else {
+                TBL[bytes[i + 2] as usize]
+            },
+            if bytes[i + 3] == b'=' {
+                0
+            } else {
+                TBL[bytes[i + 3] as usize]
+            },
         ];
-        if chunk.iter().any(|&v| v < 0) { return Err(()); }
-        let n = ((chunk[0] as u32) << 18) | ((chunk[1] as u32) << 12) | ((chunk[2] as u32) << 6) | (chunk[3] as u32);
+        if chunk.iter().any(|&v| v < 0) {
+            return Err(());
+        }
+        let n = ((chunk[0] as u32) << 18)
+            | ((chunk[1] as u32) << 12)
+            | ((chunk[2] as u32) << 6)
+            | (chunk[3] as u32);
         out.push((n >> 16) as u8);
-        if bytes[i+2] != b'=' { out.push((n >> 8) as u8); }
-        if bytes[i+3] != b'=' { out.push(n as u8); }
+        if bytes[i + 2] != b'=' {
+            out.push((n >> 8) as u8);
+        }
+        if bytes[i + 3] != b'=' {
+            out.push(n as u8);
+        }
         i += 4;
     }
     Ok(out)
@@ -320,17 +366,26 @@ const fn make_b64_table() -> [i8; 256] {
 mod tests {
     use super::*;
 
-    #[test] fn b64_decode_roundtrip() {
+    #[test]
+    fn b64_decode_roundtrip() {
         // "hello" -> "aGVsbG8="
         let r = base64_decode("aGVsbG8=").unwrap();
         assert_eq!(r, b"hello");
     }
-    #[test] fn rasterize_simple_svg() {
+    #[test]
+    fn rasterize_simple_svg() {
         let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32"><rect width="32" height="32" fill="red"/></svg>"#;
         let pm = rasterise_svg(svg, 32, 32).unwrap();
         assert_eq!(pm.width(), 32);
         assert_eq!(pm.height(), 32);
-        let red_pixels = pm.data().chunks_exact(4).filter(|p| p[0] >= 200 && p[1] < 50 && p[2] < 50).count();
-        assert!(red_pixels > 100, "expected mostly red, got {red_pixels} red pixels");
+        let red_pixels = pm
+            .data()
+            .chunks_exact(4)
+            .filter(|p| p[0] >= 200 && p[1] < 50 && p[2] < 50)
+            .count();
+        assert!(
+            red_pixels > 100,
+            "expected mostly red, got {red_pixels} red pixels"
+        );
     }
 }

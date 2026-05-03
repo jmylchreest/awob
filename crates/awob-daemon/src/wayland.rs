@@ -16,9 +16,9 @@ use std::time::{Duration, Instant};
 
 use awob_core::bindings::{Bindings, Value};
 use awob_core::render::Renderer;
+use awob_core::scene::{Anchor as ThemeAnchor, Edge};
 use awob_core::theme::Theme;
 use awob_core::{Margin, Surface as ThemeSurface};
-use awob_core::scene::{Anchor as ThemeAnchor, Edge};
 use calloop::EventLoop;
 use calloop::channel::Event as CalloopEvent;
 use calloop_wayland_source::WaylandSource;
@@ -91,12 +91,20 @@ impl SurfaceHandle {
         preempt: bool,
     ) {
         let _ = self.tx.send(SurfaceCommand::Render {
-            theme, bindings, last_value, transition_duration, theme_dir,
-            source, event, preempt,
+            theme,
+            bindings,
+            last_value,
+            transition_duration,
+            theme_dir,
+            source,
+            event,
+            preempt,
         });
     }
     #[allow(dead_code)]
-    pub fn stop(&self) { let _ = self.tx.send(SurfaceCommand::Stop); }
+    pub fn stop(&self) {
+        let _ = self.tx.send(SurfaceCommand::Stop);
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -116,12 +124,20 @@ pub enum WaylandError {
 }
 
 impl From<calloop::Error> for WaylandError {
-    fn from(e: calloop::Error) -> Self { WaylandError::Calloop(e.to_string()) }
+    fn from(e: calloop::Error) -> Self {
+        WaylandError::Calloop(e.to_string())
+    }
 }
 
 /// Spawn a Wayland event-loop thread. Returns a handle for IPC threads to push
 /// pixmaps into the surface, and a JoinHandle the caller can keep around.
-pub fn spawn() -> Result<(SurfaceHandle, std::thread::JoinHandle<Result<(), WaylandError>>), WaylandError> {
+pub fn spawn() -> Result<
+    (
+        SurfaceHandle,
+        std::thread::JoinHandle<Result<(), WaylandError>>,
+    ),
+    WaylandError,
+> {
     let (tx, rx) = channel::<SurfaceCommand>();
     let join = std::thread::Builder::new()
         .name("awob-wayland".into())
@@ -139,10 +155,8 @@ fn run(cmd_rx: Receiver<SurfaceCommand>) -> Result<(), WaylandError> {
     let output_state = OutputState::new(&globals, &qh);
     let compositor_state = CompositorState::bind(&globals, &qh)
         .map_err(|e| WaylandError::Calloop(format!("compositor: {e}")))?;
-    let shm = Shm::bind(&globals, &qh)
-        .map_err(|e| WaylandError::Calloop(format!("shm: {e}")))?;
-    let layer_shell = LayerShell::bind(&globals, &qh)
-        .map_err(|_| WaylandError::NoLayerShell)?;
+    let shm = Shm::bind(&globals, &qh).map_err(|e| WaylandError::Calloop(format!("shm: {e}")))?;
+    let layer_shell = LayerShell::bind(&globals, &qh).map_err(|_| WaylandError::NoLayerShell)?;
 
     // Forward channel commands into the calloop event loop.
     let (loop_tx, loop_rx) = calloop::channel::channel::<SurfaceCommand>();
@@ -150,7 +164,9 @@ fn run(cmd_rx: Receiver<SurfaceCommand>) -> Result<(), WaylandError> {
         .name("awob-wayland-bridge".into())
         .spawn(move || {
             while let Ok(c) = cmd_rx.recv() {
-                if loop_tx.send(c).is_err() { break; }
+                if loop_tx.send(c).is_err() {
+                    break;
+                }
             }
         })
         .map_err(|e| WaylandError::Calloop(format!("bridge spawn: {e}")))?;
@@ -158,8 +174,7 @@ fn run(cmd_rx: Receiver<SurfaceCommand>) -> Result<(), WaylandError> {
     let mut event_loop: EventLoop<'_, State> =
         EventLoop::try_new().map_err(|e| WaylandError::Calloop(e.to_string()))?;
 
-    let pool = SlotPool::new(360 * 64 * 4, &shm)
-        .map_err(|e| WaylandError::Shm(e.to_string()))?;
+    let pool = SlotPool::new(360 * 64 * 4, &shm).map_err(|e| WaylandError::Shm(e.to_string()))?;
 
     let mut state = State {
         registry_state,
@@ -190,22 +205,37 @@ fn run(cmd_rx: Receiver<SurfaceCommand>) -> Result<(), WaylandError> {
         .insert(event_loop.handle())
         .map_err(|e| WaylandError::Calloop(format!("wayland source: {e}")))?;
 
-    let _channel_token = event_loop.handle().insert_source(loop_rx, |ev, _meta, state| {
-        if let CalloopEvent::Msg(cmd) = ev {
-            match cmd {
-                SurfaceCommand::Render {
-                    theme, bindings, last_value, transition_duration, theme_dir,
-                    source, event, preempt,
-                } => {
-                    state.handle_send(
-                        theme, bindings, last_value, transition_duration,
-                        theme_dir, source, event, preempt,
-                    );
+    let _channel_token = event_loop
+        .handle()
+        .insert_source(loop_rx, |ev, _meta, state| {
+            if let CalloopEvent::Msg(cmd) = ev {
+                match cmd {
+                    SurfaceCommand::Render {
+                        theme,
+                        bindings,
+                        last_value,
+                        transition_duration,
+                        theme_dir,
+                        source,
+                        event,
+                        preempt,
+                    } => {
+                        state.handle_send(
+                            theme,
+                            bindings,
+                            last_value,
+                            transition_duration,
+                            theme_dir,
+                            source,
+                            event,
+                            preempt,
+                        );
+                    }
+                    SurfaceCommand::Stop => state.running = false,
                 }
-                SurfaceCommand::Stop => state.running = false,
             }
-        }
-    }).map_err(|e| WaylandError::Calloop(format!("channel insert: {e}")))?;
+        })
+        .map_err(|e| WaylandError::Calloop(format!("channel insert: {e}")))?;
 
     while state.running {
         let timeout = state.next_tick_timeout();
@@ -268,7 +298,12 @@ struct PendingRender {
 
 /// Animation phase relative to a cycle origin.
 #[derive(Debug, Clone, Copy, PartialEq)]
-enum Phase { FadeIn, Show, FadeOut, Done }
+enum Phase {
+    FadeIn,
+    Show,
+    FadeOut,
+    Done,
+}
 
 impl State {
     /// Dispatch entry point for a freshly arrived send. Decides whether
@@ -299,16 +334,26 @@ impl State {
 
         if !active || same_pair || preempt {
             self.queue_render(
-                theme, bindings, last_value, transition_duration,
-                theme_dir, source, event,
+                theme,
+                bindings,
+                last_value,
+                transition_duration,
+                theme_dir,
+                source,
+                event,
             );
         } else {
             // Different `(source, event)` and the sender asked to wait.
             // Stash; if a previous non-preempt was already pending it gets
             // overwritten — single-slot, newest-wins.
             self.pending = Some(PendingRender {
-                theme, bindings, last_value, transition_duration,
-                theme_dir, source, event,
+                theme,
+                bindings,
+                last_value,
+                transition_duration,
+                theme_dir,
+                source,
+                event,
             });
         }
     }
@@ -365,8 +410,9 @@ impl State {
         // fade-in, jump back to start-of-show so rapid re-sends don't
         // strobe through fade-in.
         self.cycle_start = match (prev_phase, self.cycle_start) {
-            (Phase::Show, Some(_)) | (Phase::FadeOut, Some(_)) =>
-                Some(now - self.surface_def.fade_in),
+            (Phase::Show, Some(_)) | (Phase::FadeOut, Some(_)) => {
+                Some(now - self.surface_def.fade_in)
+            }
             _ => Some(now),
         };
 
@@ -375,49 +421,64 @@ impl State {
         self.current_source = source;
         self.current_event = Some(event);
 
-        if self.configured { self.draw(); }
+        if self.configured {
+            self.draw();
+        }
     }
 
     /// Compute the bar's current interpolated value using the same formula
     /// as `draw()`. Used by `queue_render` to capture the on-screen
     /// position before a new send mutates the animation parameters.
     fn current_value_interpolated(&self) -> f64 {
-        if self.transition_duration.as_millis() == 0 { return self.target_value; }
+        if self.transition_duration.as_millis() == 0 {
+            return self.target_value;
+        }
         let elapsed = Instant::now().saturating_duration_since(self.sent_at);
         let post_fade = elapsed.saturating_sub(self.surface_def.fade_in);
-        let progress = (post_fade.as_secs_f64()
-            / self.transition_duration.as_secs_f64()).clamp(0.0, 1.0);
+        let progress =
+            (post_fade.as_secs_f64() / self.transition_duration.as_secs_f64()).clamp(0.0, 1.0);
         let eased = 1.0 - (1.0 - progress).powi(3);
         self.last_value + (self.target_value - self.last_value) * eased
     }
 
     fn current_phase(&self) -> Phase {
-        let Some(start) = self.cycle_start else { return Phase::Done };
+        let Some(start) = self.cycle_start else {
+            return Phase::Done;
+        };
         let elapsed = Instant::now().saturating_duration_since(start);
         let s = &self.surface_def;
-        if elapsed < s.fade_in { Phase::FadeIn }
-        else if elapsed < s.fade_in + s.show { Phase::Show }
-        else if elapsed < s.fade_in + s.show + s.fade_out { Phase::FadeOut }
-        else { Phase::Done }
+        if elapsed < s.fade_in {
+            Phase::FadeIn
+        } else if elapsed < s.fade_in + s.show {
+            Phase::Show
+        } else if elapsed < s.fade_in + s.show + s.fade_out {
+            Phase::FadeOut
+        } else {
+            Phase::Done
+        }
     }
 
     /// Alpha multiplier in [0.0, 1.0] for the current point in the cycle.
     fn current_alpha(&self) -> f32 {
-        let Some(start) = self.cycle_start else { return 0.0 };
+        let Some(start) = self.cycle_start else {
+            return 0.0;
+        };
         let elapsed = Instant::now().saturating_duration_since(start);
         let s = &self.surface_def;
         let fade_in_ms = s.fade_in.as_millis().max(1) as f32;
         let fade_out_ms = s.fade_out.as_millis().max(1) as f32;
         let show_end = s.fade_in + s.show;
         let total = show_end + s.fade_out;
-        if elapsed >= total { 0.0 }
-        else if elapsed >= show_end {
+        if elapsed >= total {
+            0.0
+        } else if elapsed >= show_end {
             let into = (elapsed - show_end).as_millis() as f32;
             (1.0 - into / fade_out_ms).clamp(0.0, 1.0)
-        }
-        else if elapsed < s.fade_in {
+        } else if elapsed < s.fade_in {
             (elapsed.as_millis() as f32 / fade_in_ms).clamp(0.0, 1.0)
-        } else { 1.0 }
+        } else {
+            1.0
+        }
     }
 
     fn create_layer(&mut self, surface: &ThemeSurface) {
@@ -433,7 +494,12 @@ impl State {
         layer.set_size(surface.width, surface.height);
         let (anchor, margin) = layer_anchor_and_margin(surface);
         layer.set_anchor(anchor);
-        layer.set_margin(margin.top as i32, margin.right as i32, margin.bottom as i32, margin.left as i32);
+        layer.set_margin(
+            margin.top as i32,
+            margin.right as i32,
+            margin.bottom as i32,
+            margin.left as i32,
+        );
         layer.commit();
         self.layer = Some(layer);
         self.configured = false;
@@ -444,13 +510,20 @@ impl State {
             layer.set_size(surface.width, surface.height);
             let (anchor, margin) = layer_anchor_and_margin(surface);
             layer.set_anchor(anchor);
-            layer.set_margin(margin.top as i32, margin.right as i32, margin.bottom as i32, margin.left as i32);
+            layer.set_margin(
+                margin.top as i32,
+                margin.right as i32,
+                margin.bottom as i32,
+                margin.left as i32,
+            );
             layer.commit();
         }
     }
 
     fn draw(&mut self) {
-        if self.theme.is_none() || self.bindings.is_none() || self.layer.is_none() { return; }
+        if self.theme.is_none() || self.bindings.is_none() || self.layer.is_none() {
+            return;
+        }
         let alpha = self.current_alpha();
 
         // Per-frame value transition progress, sequenced *after* fade-in.
@@ -476,17 +549,28 @@ impl State {
         frame_bindings.set("value", Value::Number(interp_value));
         frame_bindings.set("transitionProgress", Value::Number(transition_progress));
 
-        let pm = match self.renderer.render(self.theme.as_ref().unwrap(), &frame_bindings) {
+        let pm = match self
+            .renderer
+            .render(self.theme.as_ref().unwrap(), &frame_bindings)
+        {
             Ok(p) => p,
-            Err(e) => { eprintln!("awob-daemon: render: {e}"); return; }
+            Err(e) => {
+                eprintln!("awob-daemon: render: {e}");
+                return;
+            }
         };
         let width = pm.width() as i32;
         let height = pm.height() as i32;
         let stride = width * 4;
-        let buffer_result = self.pool.create_buffer(width, height, stride, wl_shm::Format::Argb8888);
+        let buffer_result =
+            self.pool
+                .create_buffer(width, height, stride, wl_shm::Format::Argb8888);
         let (buffer, canvas) = match buffer_result {
             Ok((b, c)) => (b, c),
-            Err(e) => { eprintln!("awob-daemon: shm buffer alloc failed: {e}"); return; }
+            Err(e) => {
+                eprintln!("awob-daemon: shm buffer alloc failed: {e}");
+                return;
+            }
         };
         argb_premul_with_alpha(pm.data(), canvas, alpha);
         let layer = self.layer.as_ref().unwrap();
@@ -540,13 +624,20 @@ impl State {
                 // a queued non-preempt send (if any) as a fresh OSD.
                 if let Some(p) = self.pending.take() {
                     self.queue_render(
-                        p.theme, p.bindings, p.last_value, p.transition_duration,
-                        p.theme_dir, p.source, p.event,
+                        p.theme,
+                        p.bindings,
+                        p.last_value,
+                        p.transition_duration,
+                        p.theme_dir,
+                        p.source,
+                        p.event,
                     );
                 }
             }
             Phase::FadeIn | Phase::FadeOut | Phase::Show => {
-                if self.configured { self.draw(); }
+                if self.configured {
+                    self.draw();
+                }
             }
         }
     }
@@ -562,7 +653,10 @@ fn argb_premul_with_alpha(src: &[u8], dst: &mut [u8], alpha: f32) {
     let a = alpha.clamp(0.0, 1.0);
     if a >= 0.999 {
         for (s, d) in src.chunks_exact(4).zip(dst.chunks_exact_mut(4)) {
-            d[0] = s[2]; d[1] = s[1]; d[2] = s[0]; d[3] = s[3];
+            d[0] = s[2];
+            d[1] = s[1];
+            d[2] = s[0];
+            d[3] = s[3];
         }
     } else if a <= 0.001 {
         dst.fill(0);
@@ -592,10 +686,18 @@ fn layer_anchor_and_margin(s: &ThemeSurface) -> (LayerAnchor, Margin) {
     }
     // Diagonal special-cases set both edges
     match s.anchor {
-        TopLeft => { a = LayerAnchor::TOP | LayerAnchor::LEFT; }
-        TopRight => { a = LayerAnchor::TOP | LayerAnchor::RIGHT; }
-        BottomLeft => { a = LayerAnchor::BOTTOM | LayerAnchor::LEFT; }
-        BottomRight => { a = LayerAnchor::BOTTOM | LayerAnchor::RIGHT; }
+        TopLeft => {
+            a = LayerAnchor::TOP | LayerAnchor::LEFT;
+        }
+        TopRight => {
+            a = LayerAnchor::TOP | LayerAnchor::RIGHT;
+        }
+        BottomLeft => {
+            a = LayerAnchor::BOTTOM | LayerAnchor::LEFT;
+        }
+        BottomRight => {
+            a = LayerAnchor::BOTTOM | LayerAnchor::RIGHT;
+        }
         Top | Bottom | Left | Right | Center => {}
     }
     (a, s.margin)
@@ -604,15 +706,45 @@ fn layer_anchor_and_margin(s: &ThemeSurface) -> (LayerAnchor, Margin) {
 // ---- handler delegations ----
 
 impl CompositorHandler for State {
-    fn scale_factor_changed(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_surface::WlSurface, _: i32) {}
-    fn transform_changed(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_surface::WlSurface, _: wl_output::Transform) {}
+    fn scale_factor_changed(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_surface::WlSurface,
+        _: i32,
+    ) {
+    }
+    fn transform_changed(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_surface::WlSurface,
+        _: wl_output::Transform,
+    ) {
+    }
     fn frame(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_surface::WlSurface, _: u32) {}
-    fn surface_enter(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_surface::WlSurface, _: &wl_output::WlOutput) {}
-    fn surface_leave(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_surface::WlSurface, _: &wl_output::WlOutput) {}
+    fn surface_enter(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_surface::WlSurface,
+        _: &wl_output::WlOutput,
+    ) {
+    }
+    fn surface_leave(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_surface::WlSurface,
+        _: &wl_output::WlOutput,
+    ) {
+    }
 }
 
 impl OutputHandler for State {
-    fn output_state(&mut self) -> &mut OutputState { &mut self.output_state }
+    fn output_state(&mut self) -> &mut OutputState {
+        &mut self.output_state
+    }
     fn new_output(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {}
     fn update_output(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {}
     fn output_destroyed(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {}
@@ -632,16 +764,22 @@ impl LayerShellHandler for State {
         _serial: u32,
     ) {
         self.configured = true;
-        if self.theme.is_some() && self.bindings.is_some() { self.draw(); }
+        if self.theme.is_some() && self.bindings.is_some() {
+            self.draw();
+        }
     }
 }
 
 impl ShmHandler for State {
-    fn shm_state(&mut self) -> &mut Shm { &mut self.shm }
+    fn shm_state(&mut self) -> &mut Shm {
+        &mut self.shm
+    }
 }
 
 impl ProvidesRegistryState for State {
-    fn registry(&mut self) -> &mut RegistryState { &mut self.registry_state }
+    fn registry(&mut self) -> &mut RegistryState {
+        &mut self.registry_state
+    }
     registry_handlers!(OutputState);
 }
 
@@ -650,4 +788,3 @@ delegate_output!(State);
 delegate_registry!(State);
 delegate_shm!(State);
 delegate_layer!(State);
-

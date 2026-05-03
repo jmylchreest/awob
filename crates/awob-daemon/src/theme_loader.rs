@@ -99,8 +99,12 @@ impl LoadedTheme {
     /// file the theme's `import` directives transitively pulled in.
     pub fn watch_paths(&self) -> Vec<PathBuf> {
         let mut v = Vec::new();
-        if let Some(p) = &self.scene_path { v.push(p.clone()); }
-        for imp in &self.theme.imported_files { v.push(imp.clone()); }
+        if let Some(p) = &self.scene_path {
+            v.push(p.clone());
+        }
+        for imp in &self.theme.imported_files {
+            v.push(imp.clone());
+        }
         v
     }
 }

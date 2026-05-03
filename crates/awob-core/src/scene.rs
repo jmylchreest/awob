@@ -13,9 +13,15 @@ use crate::length::Length;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Anchor {
-    TopLeft, Top, TopRight,
-    Left, Center, Right,
-    BottomLeft, Bottom, BottomRight,
+    TopLeft,
+    Top,
+    TopRight,
+    Left,
+    Center,
+    Right,
+    BottomLeft,
+    Bottom,
+    BottomRight,
 }
 
 impl Anchor {
@@ -52,7 +58,11 @@ impl Anchor {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Edge { Start, Center, End }
+pub enum Edge {
+    Start,
+    Center,
+    End,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Margin {
@@ -80,10 +90,14 @@ pub struct Surface {
 
 impl Surface {
     /// Total visible duration: fade_in + show + fade_out.
-    pub fn total(&self) -> Duration { self.fade_in + self.show + self.fade_out }
+    pub fn total(&self) -> Duration {
+        self.fade_in + self.show + self.fade_out
+    }
     /// Backwards-compat alias kept for callers that still think in terms of
     /// a single timeout. Equivalent to `total()`.
-    pub fn timeout(&self) -> Duration { self.total() }
+    pub fn timeout(&self) -> Duration {
+        self.total()
+    }
 }
 
 impl Default for Surface {
@@ -92,7 +106,10 @@ impl Default for Surface {
             width: 360,
             height: 64,
             anchor: Anchor::Bottom,
-            margin: Margin { bottom: 56, ..Default::default() },
+            margin: Margin {
+                bottom: 56,
+                ..Default::default()
+            },
             // Snappy fade-in so the bar appears nearly instantly when the
             // OSD is triggered.
             fade_in: Duration::from_millis(150),
@@ -160,18 +177,24 @@ impl AttrValue {
         let template = Template::parse(&raw)?;
         Ok(Self { raw, template })
     }
-    pub fn render(&self, b: &Bindings) -> Result<String, ExprError> { self.template.render(b) }
+    pub fn render(&self, b: &Bindings) -> Result<String, ExprError> {
+        self.template.render(b)
+    }
     pub fn render_length(&self, b: &Bindings) -> Result<Length, ExprError> {
         let s = self.render(b)?;
         Length::parse(&s).map_err(|e| ExprError::Type(format!("length parse `{s}`: {e}")))
     }
     pub fn render_number(&self, b: &Bindings) -> Result<f64, ExprError> {
         let s = self.render(b)?;
-        s.trim().parse::<f64>().map_err(|_| ExprError::Type(format!("number parse `{s}`")))
+        s.trim()
+            .parse::<f64>()
+            .map_err(|_| ExprError::Type(format!("number parse `{s}`")))
     }
     pub fn render_colour(&self, b: &Bindings) -> Result<Colour, ExprError> {
         let s = self.render(b)?;
-        if let Some(c) = b.palette.get(&s).copied() { return Ok(c); }
+        if let Some(c) = b.palette.get(&s).copied() {
+            return Ok(c);
+        }
         Colour::parse(&s).map_err(|e| ExprError::Type(format!("colour parse `{s}`: {e}")))
     }
     pub fn render_value(&self, b: &Bindings) -> Result<Value, ExprError> {
@@ -268,4 +291,3 @@ pub struct BarEl {
     /// unset. Default `2`. KDL key: `gap`.
     pub gap: Option<AttrValue>,
 }
-

@@ -53,14 +53,18 @@ fn discover_device() -> Option<PathBuf> {
     let entries = std::fs::read_dir(root).ok()?;
     for ent in entries.flatten() {
         let p = ent.path();
-        if p.join("brightness").exists() { return Some(p); }
+        if p.join("brightness").exists() {
+            return Some(p);
+        }
     }
     None
 }
 
 fn read_u32(p: &Path) -> std::io::Result<u32> {
     let s = std::fs::read_to_string(p)?;
-    s.trim().parse().map_err(|e| std::io::Error::other(format!("parse {}: {e}", p.display())))
+    s.trim()
+        .parse()
+        .map_err(|e| std::io::Error::other(format!("parse {}: {e}", p.display())))
 }
 
 fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
@@ -73,12 +77,16 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     if !brightness_path.exists() {
         return Err(format!("brightness file not found at {}", brightness_path.display()).into());
     }
-    let device_name = dir.file_name().map(|n| n.to_string_lossy().into_owned())
+    let device_name = dir
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| "backlight".into());
     // Stable source — same device, same source across restarts. No PID
     // suffix so the daemon sees the same source on respawn (no spurious
     // duplicate-listener warning).
-    let source = cli.source.unwrap_or_else(|| format!("backlight-{}", sanitise_device(&device_name)));
+    let source = cli
+        .source
+        .unwrap_or_else(|| format!("backlight-{}", sanitise_device(&device_name)));
 
     // Friendly label. If user passed --label, use it. Otherwise probe
     // Wayland outputs and match the backlight's connector to one. Fall
@@ -94,7 +102,10 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
          connector={connector:?} label={label:?}"
     );
 
-    eprintln!("awob-listener-backlight: device={} source={}", device_name, source);
+    eprintln!(
+        "awob-listener-backlight: device={} source={}",
+        device_name, source
+    );
 
     let max = read_u32(&max_path).unwrap_or(100) as f64;
     let initial = read_u32(&brightness_path).unwrap_or(0) as f64;
@@ -113,12 +124,16 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     let mut last = initial;
     let debounce = Duration::from_millis(40);
     loop {
-        if rx.recv().is_err() { break; }
+        if rx.recv().is_err() {
+            break;
+        }
         // Debounce a burst of writes (sysfs can fire several events per change).
         std::thread::sleep(debounce);
         while rx.try_recv().is_ok() {}
         let current = read_u32(&brightness_path).unwrap_or(last as u32) as f64;
-        if (current - last).abs() < f64::EPSILON { continue; }
+        if (current - last).abs() < f64::EPSILON {
+            continue;
+        }
         last = current;
         let _ = send_to_daemon(&cli.socket, &source, &device_name, &label, current, max);
     }
@@ -133,7 +148,9 @@ fn read_connector(backlight_dir: &Path) -> Option<String> {
     let last = target.file_name()?.to_str()?;
     // strip the leading `cardN-` if present
     if let Some(rest) = last.strip_prefix(|c: char| c == 'c').and_then(|s| {
-        s.strip_prefix("ard").and_then(|t| t.split_once('-')).map(|(_, name)| name)
+        s.strip_prefix("ard")
+            .and_then(|t| t.split_once('-'))
+            .map(|(_, name)| name)
     }) {
         Some(rest.to_string())
     } else {
@@ -142,7 +159,10 @@ fn read_connector(backlight_dir: &Path) -> Option<String> {
 }
 
 fn derive_label(device_name: &str, connector: Option<&str>) -> String {
-    let connector = match connector { Some(c) => c, None => return device_name.to_string() };
+    let connector = match connector {
+        Some(c) => c,
+        None => return device_name.to_string(),
+    };
 
     // 1. Wayland wl_output: connector name should match `wl_output.name`.
     let outputs = wayland_outputs::probe(Duration::from_millis(300));
@@ -156,13 +176,19 @@ fn derive_label(device_name: &str, connector: Option<&str>) -> String {
             (true, true) => {} // fall through
         }
         let desc = info.description.trim();
-        if !desc.is_empty() { return desc.to_string(); }
+        if !desc.is_empty() {
+            return desc.to_string();
+        }
     }
 
     // 2. Heuristic from connector type.
-    if connector.starts_with("eDP") || connector.starts_with("LVDS") || connector.starts_with("DSI") {
+    if connector.starts_with("eDP") || connector.starts_with("LVDS") || connector.starts_with("DSI")
+    {
         "Display".to_string()
-    } else if connector.starts_with("HDMI") || connector.starts_with("DP-") || connector.starts_with("VGA") {
+    } else if connector.starts_with("HDMI")
+        || connector.starts_with("DP-")
+        || connector.starts_with("VGA")
+    {
         "External Display".to_string()
     } else {
         // 3. Raw sysfs device name as last resort.
@@ -210,6 +236,9 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
     match run(cli) {
         Ok(()) => ExitCode::SUCCESS,
-        Err(e) => { eprintln!("awob-listener-backlight: {e}"); ExitCode::from(1) }
+        Err(e) => {
+            eprintln!("awob-listener-backlight: {e}");
+            ExitCode::from(1)
+        }
     }
 }

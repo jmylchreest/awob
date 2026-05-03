@@ -93,7 +93,14 @@ impl BatteryState {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum WarningLevel { Unknown, None, Discharging, Low, Critical, Action }
+pub enum WarningLevel {
+    Unknown,
+    None,
+    Discharging,
+    Low,
+    Critical,
+    Action,
+}
 
 impl WarningLevel {
     fn from_dbus(v: u32) -> Self {
@@ -123,17 +130,28 @@ fn parse_state_filter(arg: &str) -> HashSet<BatteryState> {
     let mut out = HashSet::new();
     for token in arg.split(',') {
         let t = token.trim();
-        if t.is_empty() { continue; }
-        if t.eq_ignore_ascii_case("all") {
-            for v in [
-                BatteryState::Charging, BatteryState::Discharging, BatteryState::Empty,
-                BatteryState::FullyCharged, BatteryState::PendingCharge,
-                BatteryState::PendingDischarge, BatteryState::Unknown,
-            ] { out.insert(v); }
+        if t.is_empty() {
             continue;
         }
-        if let Some(s) = BatteryState::parse_slug(t) { out.insert(s); }
-        else { eprintln!("awob-listener-upower: unknown state `{t}` in --states"); }
+        if t.eq_ignore_ascii_case("all") {
+            for v in [
+                BatteryState::Charging,
+                BatteryState::Discharging,
+                BatteryState::Empty,
+                BatteryState::FullyCharged,
+                BatteryState::PendingCharge,
+                BatteryState::PendingDischarge,
+                BatteryState::Unknown,
+            ] {
+                out.insert(v);
+            }
+            continue;
+        }
+        if let Some(s) = BatteryState::parse_slug(t) {
+            out.insert(s);
+        } else {
+            eprintln!("awob-listener-upower: unknown state `{t}` in --states");
+        }
     }
     out
 }
@@ -142,9 +160,14 @@ fn parse_warning_filter(arg: &str) -> HashSet<WarningLevel> {
     let mut out = HashSet::new();
     for token in arg.split(',') {
         let t = token.trim();
-        if t.is_empty() { continue; }
-        if let Some(w) = WarningLevel::parse_slug(t) { out.insert(w); }
-        else { eprintln!("awob-listener-upower: unknown warning level `{t}` in --warning-levels"); }
+        if t.is_empty() {
+            continue;
+        }
+        if let Some(w) = WarningLevel::parse_slug(t) {
+            out.insert(w);
+        } else {
+            eprintln!("awob-listener-upower: unknown warning level `{t}` in --warning-levels");
+        }
     }
     out
 }
@@ -162,7 +185,7 @@ fn pick_icon(pct: f64, state: BatteryState) -> &'static str {
         match bucket {
             "full" => "battery-full-charged",
             "good" => "battery-good-charging",
-            "low"  => "battery-low-charging",
+            "low" => "battery-low-charging",
             "caution" => "battery-caution-charging",
             _ => "battery-empty-charging",
         }
@@ -170,7 +193,7 @@ fn pick_icon(pct: f64, state: BatteryState) -> &'static str {
         match bucket {
             "full" => "battery-full",
             "good" => "battery-good",
-            "low"  => "battery-low",
+            "low" => "battery-low",
             "caution" => "battery-caution",
             _ => "battery-empty",
         }
@@ -181,9 +204,15 @@ fn pick_style(pct: f64, warning: WarningLevel) -> &'static str {
     match warning {
         WarningLevel::Action | WarningLevel::Critical => "critical",
         WarningLevel::Low => "warn",
-        _ => if pct < 10.0 { "critical" }
-             else if pct < 25.0 { "warn" }
-             else { "normal" },
+        _ => {
+            if pct < 10.0 {
+                "critical"
+            } else if pct < 25.0 {
+                "warn"
+            } else {
+                "normal"
+            }
+        }
     }
 }
 
@@ -215,7 +244,9 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     // a fixed `upower` source identifies it uniquely. Restarts re-use the
     // same source (no respawn duplicate-listener warning); a custom value
     // can still be passed via `--source` if needed.
-    let source = cli.source.clone()
+    let source = cli
+        .source
+        .clone()
         .map(|s| format!("upower-{s}"))
         .unwrap_or_else(|| "upower".into());
     eprintln!("awob-listener-upower: source={source}");
@@ -240,7 +271,8 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     let percentage: f64 = proxy.get_property("Percentage")?;
     eprintln!(
         "  initial: pct={percentage:.0} state={} warning={:?}",
-        last_state.slug(), last_warning,
+        last_state.slug(),
+        last_warning,
     );
 
     // Subscribe to PropertiesChanged on the Properties interface for this object.
@@ -255,16 +287,24 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     for msg in signal_iter {
         // Reread current values; the signal payload could be parsed but
         // the property cache is simpler and reliable.
-        let pct: f64 = match proxy.get_property("Percentage") { Ok(v) => v, Err(_) => continue };
+        let pct: f64 = match proxy.get_property("Percentage") {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
         let state = BatteryState::from_dbus(proxy.get_property::<u32>("State").unwrap_or(0));
-        let warning = WarningLevel::from_dbus(proxy.get_property::<u32>("WarningLevel").unwrap_or(0));
+        let warning =
+            WarningLevel::from_dbus(proxy.get_property::<u32>("WarningLevel").unwrap_or(0));
 
         let state_changed = state != last_state;
         let warning_changed = warning != last_warning;
 
         let mut should_fire = false;
-        if state_changed && state_filter.contains(&state) { should_fire = true; }
-        if warning_changed && warning_filter.contains(&warning) { should_fire = true; }
+        if state_changed && state_filter.contains(&state) {
+            should_fire = true;
+        }
+        if warning_changed && warning_filter.contains(&warning) {
+            should_fire = true;
+        }
 
         if should_fire {
             if let Err(e) = fire(&cli.socket, &source, pct, state, warning) {
@@ -282,7 +322,10 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
     match run(cli) {
         Ok(()) => ExitCode::SUCCESS,
-        Err(e) => { eprintln!("awob-listener-upower: {e}"); ExitCode::from(1) }
+        Err(e) => {
+            eprintln!("awob-listener-upower: {e}");
+            ExitCode::from(1)
+        }
     }
 }
 
@@ -290,23 +333,32 @@ fn main() -> ExitCode {
 mod tests {
     use super::*;
 
-    #[test] fn icon_buckets() {
+    #[test]
+    fn icon_buckets() {
         assert_eq!(pick_icon(95.0, BatteryState::Discharging), "battery-full");
         assert_eq!(pick_icon(50.0, BatteryState::Discharging), "battery-good");
         assert_eq!(pick_icon(30.0, BatteryState::Discharging), "battery-low");
-        assert_eq!(pick_icon(15.0, BatteryState::Discharging), "battery-caution");
-        assert_eq!(pick_icon(5.0,  BatteryState::Discharging), "battery-empty");
-        assert_eq!(pick_icon(50.0, BatteryState::Charging), "battery-good-charging");
+        assert_eq!(
+            pick_icon(15.0, BatteryState::Discharging),
+            "battery-caution"
+        );
+        assert_eq!(pick_icon(5.0, BatteryState::Discharging), "battery-empty");
+        assert_eq!(
+            pick_icon(50.0, BatteryState::Charging),
+            "battery-good-charging"
+        );
     }
-    #[test] fn style_thresholds() {
+    #[test]
+    fn style_thresholds() {
         assert_eq!(pick_style(50.0, WarningLevel::None), "normal");
         assert_eq!(pick_style(20.0, WarningLevel::None), "warn");
-        assert_eq!(pick_style(5.0,  WarningLevel::None), "critical");
+        assert_eq!(pick_style(5.0, WarningLevel::None), "critical");
         // WarningLevel overrides percent
         assert_eq!(pick_style(80.0, WarningLevel::Critical), "critical");
         assert_eq!(pick_style(80.0, WarningLevel::Low), "warn");
     }
-    #[test] fn parse_filters() {
+    #[test]
+    fn parse_filters() {
         let s = parse_state_filter("charging,discharging");
         assert!(s.contains(&BatteryState::Charging));
         assert!(s.contains(&BatteryState::Discharging));

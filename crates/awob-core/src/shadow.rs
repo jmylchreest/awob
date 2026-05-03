@@ -47,7 +47,12 @@ pub fn parse(s: &str) -> Option<ShadowSpec> {
     let blur_radius: f32 = tokens.next()?.parse().ok()?;
     let colour_str: String = tokens.collect::<String>();
     let colour = Colour::parse(&colour_str).ok()?;
-    Some(ShadowSpec { offset_x, offset_y, blur_radius, colour })
+    Some(ShadowSpec {
+        offset_x,
+        offset_y,
+        blur_radius,
+        colour,
+    })
 }
 
 /// Cache of pre-blurred shadow masks. The renderer keeps one of these and
@@ -60,17 +65,16 @@ pub struct ShadowCache {
 }
 
 impl ShadowCache {
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 
-    pub fn get_or_compute(
-        &mut self,
-        w: u32,
-        h: u32,
-        radius: u32,
-        blur: u32,
-    ) -> (u32, u32, &[u8]) {
+    pub fn get_or_compute(&mut self, w: u32, h: u32, radius: u32, blur: u32) -> (u32, u32, &[u8]) {
         let key = (w, h, radius, blur);
-        let entry = self.masks.entry(key).or_insert_with(|| compute_mask(w, h, radius, blur));
+        let entry = self
+            .masks
+            .entry(key)
+            .or_insert_with(|| compute_mask(w, h, radius, blur));
         (entry.0, entry.1, &entry.2)
     }
 }
@@ -78,7 +82,9 @@ impl ShadowCache {
 /// Padding around the rect inside the mask buffer. `blur_radius * 2` is
 /// the visual extent of a Gaussian — beyond that, the kernel weight is
 /// effectively zero. We use that as the safe envelope.
-pub fn shadow_padding(blur: u32) -> u32 { (blur * 2).max(1) }
+pub fn shadow_padding(blur: u32) -> u32 {
+    (blur * 2).max(1)
+}
 
 fn compute_mask(w: u32, h: u32, radius: u32, blur: u32) -> (u32, u32, Vec<u8>) {
     let pad = shadow_padding(blur);
@@ -94,7 +100,13 @@ fn compute_mask(w: u32, h: u32, radius: u32, blur: u32) -> (u32, u32, Vec<u8>) {
 }
 
 fn rasterise_rounded_rect_alpha(
-    buf: &mut [u8], mw: u32, _mh: u32, pad: u32, w: u32, h: u32, radius: u32,
+    buf: &mut [u8],
+    mw: u32,
+    _mh: u32,
+    pad: u32,
+    w: u32,
+    h: u32,
+    radius: u32,
 ) {
     let x0 = pad as i32;
     let y0 = pad as i32;
@@ -152,7 +164,9 @@ fn build_kernel(sigma: f32) -> Vec<f32> {
         k[i] = v;
         sum += v;
     }
-    for v in &mut k { *v /= sum; }
+    for v in &mut k {
+        *v /= sum;
+    }
     k
 }
 

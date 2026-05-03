@@ -11,11 +11,15 @@ fn main() {
 
     match cbindgen::Builder::new()
         .with_crate(&crate_dir)
-        .with_config(cbindgen::Config::from_file(format!("{crate_dir}/cbindgen.toml")).unwrap_or_default())
+        .with_config(
+            cbindgen::Config::from_file(format!("{crate_dir}/cbindgen.toml")).unwrap_or_default(),
+        )
         .with_language(cbindgen::Language::C)
         .generate()
     {
-        Ok(b) => { b.write_to_file(&header_path); }
+        Ok(b) => {
+            b.write_to_file(&header_path);
+        }
         Err(e) => {
             // Don't fail the build during early development; emit a warning
             // so the rest of the workspace stays buildable while the FFI
@@ -24,7 +28,9 @@ fn main() {
         }
     }
 
-    let exposed = PathBuf::from(&crate_dir).join("include").join("awob_client.h");
+    let exposed = PathBuf::from(&crate_dir)
+        .join("include")
+        .join("awob_client.h");
     if header_path.exists() {
         std::fs::create_dir_all(exposed.parent().unwrap()).ok();
         let _ = std::fs::copy(&header_path, &exposed);

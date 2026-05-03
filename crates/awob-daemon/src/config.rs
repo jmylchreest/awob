@@ -64,11 +64,16 @@ pub struct SupervisorConfig {
 
 impl Default for SupervisorConfig {
     fn default() -> Self {
-        Self { auto: default_auto(), disable: Vec::new() }
+        Self {
+            auto: default_auto(),
+            disable: Vec::new(),
+        }
     }
 }
 
-fn default_auto() -> bool { true }
+fn default_auto() -> bool {
+    true
+}
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -116,7 +121,9 @@ impl AwobConfig {
             Some(p) => p,
             None => return Ok(None),
         };
-        if !path.exists() { return Ok(None); }
+        if !path.exists() {
+            return Ok(None);
+        }
         Self::load(&path).map(Some)
     }
 }
@@ -127,16 +134,20 @@ mod tests {
 
     #[test]
     fn parses_minimal() {
-        let cfg: AwobConfig = toml::from_str(r#"
+        let cfg: AwobConfig = toml::from_str(
+            r#"
             theme = "tinct"
-        "#).unwrap();
+        "#,
+        )
+        .unwrap();
         assert_eq!(cfg.theme.as_deref(), Some("tinct"));
         assert!(cfg.listeners.is_empty());
     }
 
     #[test]
     fn parses_listeners() {
-        let cfg: AwobConfig = toml::from_str(r#"
+        let cfg: AwobConfig = toml::from_str(
+            r#"
             [[listeners]]
             name = "pipewire"
             command = "awob-listener-pipewire"
@@ -146,7 +157,9 @@ mod tests {
             command = "awob-listener-wob"
             args = ["--fifo", "/tmp/wob.sock"]
             restart = "on-failure"
-        "#).unwrap();
+        "#,
+        )
+        .unwrap();
         assert_eq!(cfg.listeners.len(), 2);
         assert_eq!(cfg.listeners[0].name, "pipewire");
         assert_eq!(cfg.listeners[1].args, vec!["--fifo", "/tmp/wob.sock"]);
@@ -155,11 +168,17 @@ mod tests {
 
     #[test]
     fn rejects_unknown_keys() {
-        let err = toml::from_str::<AwobConfig>(r#"
+        let err = toml::from_str::<AwobConfig>(
+            r#"
             theme = "default"
             unknown_key = "oops"
-        "#).unwrap_err();
+        "#,
+        )
+        .unwrap_err();
         let msg = err.to_string();
-        assert!(msg.contains("unknown") || msg.contains("unknown_key"), "got: {msg}");
+        assert!(
+            msg.contains("unknown") || msg.contains("unknown_key"),
+            "got: {msg}"
+        );
     }
 }

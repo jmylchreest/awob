@@ -21,9 +21,13 @@ pub fn default_max() -> f64 {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Request {
-    Hello { protocol: u32 },
+    Hello {
+        protocol: u32,
+    },
     Send(SendPayload),
-    Query { source: Option<String> },
+    Query {
+        source: Option<String>,
+    },
     SetTheme {
         name: String,
         /// When `true`, the daemon rewrites the active theme name into
@@ -44,11 +48,23 @@ pub enum Request {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Response {
     Ok,
-    Error { message: String },
-    Hello { protocol: u32, daemon_version: String },
-    Query { entries: Vec<HistoryEntry> },
-    ThemeList { themes: Vec<ThemeInfo> },
-    Version { daemon_version: String, protocol: u32 },
+    Error {
+        message: String,
+    },
+    Hello {
+        protocol: u32,
+        daemon_version: String,
+    },
+    Query {
+        entries: Vec<HistoryEntry>,
+    },
+    ThemeList {
+        themes: Vec<ThemeInfo>,
+    },
+    Version {
+        daemon_version: String,
+        protocol: u32,
+    },
 }
 
 /// One theme entry returned by `Request::ThemeList`. `name` is what
@@ -225,7 +241,9 @@ mod tests {
 
     #[test]
     fn response_error_round_trip() {
-        let r = Response::Error { message: "no theme".into() };
+        let r = Response::Error {
+            message: "no theme".into(),
+        };
         let json = serde_json::to_string(&r).unwrap();
         let back: Response = serde_json::from_str(&json).unwrap();
         assert_eq!(r, back);
