@@ -59,6 +59,12 @@ enum Cmd {
     /// Theme management.
     #[command(subcommand)]
     Theme(ThemeCmd),
+    /// Force-palette overlay control. Set or clear an overlay applied
+    /// after the active theme's own palette + styles, regardless of
+    /// what the theme itself imports. Lets you flip colour schemes
+    /// without editing the theme file.
+    #[command(subcommand)]
+    ForcePalette(ForcePaletteCmd),
     /// Print client + daemon version info.
     Version,
 }
@@ -75,6 +81,14 @@ enum ThemeCmd {
     /// List every theme the daemon can resolve.
     List,
     Reload,
+}
+
+#[derive(Subcommand, Debug)]
+enum ForcePaletteCmd {
+    /// Install an overlay palette and reload the active theme.
+    Set { path: PathBuf },
+    /// Remove any active overlay and reload the active theme.
+    Clear,
 }
 
 fn connect(socket: Option<PathBuf>) -> Result<Client, awob_client::Error> {
@@ -157,6 +171,10 @@ fn run(cli: Cli) -> Result<(), awob_client::Error> {
             Ok(())
         }
         Cmd::Theme(ThemeCmd::Reload) => c.reload(),
+        Cmd::ForcePalette(ForcePaletteCmd::Set { path }) => {
+            c.set_force_palette(Some(path.to_string_lossy().into_owned()))
+        }
+        Cmd::ForcePalette(ForcePaletteCmd::Clear) => c.set_force_palette(None),
         Cmd::Version => {
             let (daemon, proto) = c.version()?;
             println!("client: {}", env!("CARGO_PKG_VERSION"));

@@ -184,6 +184,15 @@ impl Shared {
                     Ok(t) => {
                         self.theme = t;
                         self.rewatch();
+                        // Push the new theme to the wayland thread so
+                        // a currently-visible OSD redraws with it
+                        // instead of waiting for the next send.
+                        if let Some(handle) = &self.surface {
+                            handle.retheme(
+                                self.theme.theme.clone(),
+                                self.theme.source_dir.clone(),
+                            );
+                        }
                         if persist {
                             if let Some(path) = &self.config_path {
                                 if let Err(e) = persist_theme_to_config(path, &name) {
@@ -221,6 +230,12 @@ impl Shared {
                     Ok(t) => {
                         self.theme = t;
                         self.rewatch();
+                        if let Some(handle) = &self.surface {
+                            handle.retheme(
+                                self.theme.theme.clone(),
+                                self.theme.source_dir.clone(),
+                            );
+                        }
                         Response::Ok
                     }
                     Err(e) => Response::Error {
@@ -231,6 +246,34 @@ impl Shared {
             Request::ThemeList => Response::ThemeList {
                 themes: enumerate_themes(self.themes_root.as_deref(), &self.theme.name),
             },
+            Request::SetForcePalette { path } => {
+                // Update the in-memory force_palette and immediately
+                // reload the active theme so the overlay applies (or
+                // is removed). Then push the result to the wayland
+                // thread for instant redraw of any visible OSD.
+                self.force_palette = path.map(std::path::PathBuf::from);
+                let name = self.theme.name.clone();
+                match theme_loader::load(
+                    self.themes_root.as_deref(),
+                    &name,
+                    self.force_palette.as_deref(),
+                ) {
+                    Ok(t) => {
+                        self.theme = t;
+                        self.rewatch();
+                        if let Some(handle) = &self.surface {
+                            handle.retheme(
+                                self.theme.theme.clone(),
+                                self.theme.source_dir.clone(),
+                            );
+                        }
+                        Response::Ok
+                    }
+                    Err(e) => Response::Error {
+                        message: format!("set force-palette: {e}"),
+                    },
+                }
+            }
             Request::Version => Response::Version {
                 daemon_version: env!("CARGO_PKG_VERSION").into(),
                 protocol: PROTOCOL_VERSION,
@@ -550,6 +593,16 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                     Ok(t) => {
                         s.theme = t;
                         s.rewatch();
+                        // Push the freshly-parsed theme to the wayland
+                        // thread so a visible OSD redraws with the new
+                        // colours / layout instantly. Idle surface
+                        // ignores the message.
+                        if let Some(handle) = &s.surface {
+                            handle.retheme(
+                                s.theme.theme.clone(),
+                                s.theme.source_dir.clone(),
+                            );
+                        }
                         eprintln!(
                             "hot-reloaded theme `{name}` ({} watched files)",
                             s.theme.watch_paths().len()

@@ -68,6 +68,21 @@ pub enum SurfaceCommand {
         /// *different* `(source, event)` pair. See `SendPayload::preempt`.
         preempt: bool,
     },
+    /// Replace the active theme on a *visible* OSD without restarting
+    /// the cycle. Sent by the daemon when the user runs `awob theme
+    /// set …`, when a theme file is hot-reloaded by the watcher, or
+    /// when the force-palette overlay is toggled at runtime.
+    ///
+    /// The wayland thread refreshes `surface_def` + `theme_dir` and
+    /// updates `bindings.palette` so palette-keyed colour expressions
+    /// (`fill="$bg"` etc.) resolve against the new palette on the
+    /// next frame. If the surface is currently idle (`Phase::Done`),
+    /// this is a no-op — the next send will pick up the new theme via
+    /// the daemon's normal path.
+    Retheme {
+        theme: Theme,
+        theme_dir: Option<std::path::PathBuf>,
+    },
     /// Reserved for graceful shutdown of the wayland thread; not yet wired.
     #[allow(dead_code)]
     Stop,
@@ -100,6 +115,13 @@ impl SurfaceHandle {
             event,
             preempt,
         });
+    }
+    /// Push a runtime theme/palette change. If the OSD is currently
+    /// visible, it redraws with the new theme on the next frame.
+    /// If idle, the wayland thread silently records the new theme
+    /// for the next render.
+    pub fn retheme(&self, theme: Theme, theme_dir: Option<std::path::PathBuf>) {
+        let _ = self.tx.send(SurfaceCommand::Retheme { theme, theme_dir });
     }
     #[allow(dead_code)]
     pub fn stop(&self) {
@@ -230,6 +252,9 @@ fn run(cmd_rx: Receiver<SurfaceCommand>) -> Result<(), WaylandError> {
                             event,
                             preempt,
                         );
+                    }
+                    SurfaceCommand::Retheme { theme, theme_dir } => {
+                        state.retheme(theme, theme_dir);
                     }
                     SurfaceCommand::Stop => state.running = false,
                 }
@@ -421,6 +446,45 @@ impl State {
         self.current_source = source;
         self.current_event = Some(event);
 
+        if self.configured {
+            self.draw();
+        }
+    }
+
+    /// Replace the active theme on a *visible* OSD without restarting
+    /// the cycle. Driven by `SetTheme` / `Reload` / `SetForcePalette`
+    /// IPC requests and by the daemon's hot-reload watcher when a
+    /// theme file changes on disk.
+    ///
+    /// Behaviour:
+    /// * Idle (no active cycle): nothing to redraw. The stored theme
+    ///   isn't updated either — the next `Send` will arrive with the
+    ///   new theme already applied via the daemon's normal path.
+    /// * Active: swap `theme`, `theme_dir`, `surface_def`; refresh
+    ///   `bindings.palette` so palette-keyed colour expressions
+    ///   resolve against the new palette on the next frame; redraw.
+    ///
+    /// Style overrides previously applied via `apply_style` retain
+    /// their resolved Colour values — the visible bar's `$accent`
+    /// won't update until the next `Send` re-runs `apply_style`.
+    /// Palette-keyed colours (`fill="$bg"` etc.) DO update because
+    /// they re-resolve from `bindings.palette` on every render.
+    fn retheme(&mut self, theme: Theme, theme_dir: Option<std::path::PathBuf>) {
+        // Only do work if there's an active OSD on screen. Idle ⇒
+        // next send picks up the new theme via main.rs's normal path.
+        if self.theme.is_none() || self.bindings.is_none() {
+            return;
+        }
+        let surface = theme.surface.clone();
+        if self.layer.is_some() {
+            self.update_layer(&surface);
+        }
+        self.surface_def = surface;
+        self.renderer.set_theme_dir(theme_dir);
+        if let Some(bindings) = self.bindings.as_mut() {
+            bindings.palette = theme.palette.clone();
+        }
+        self.theme = Some(theme);
         if self.configured {
             self.draw();
         }

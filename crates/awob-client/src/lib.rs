@@ -138,6 +138,16 @@ impl Client {
         }
     }
 
+    /// Install or clear the runtime force-palette overlay.
+    /// `Some(path)` activates the overlay; `None` removes any
+    /// active one. Triggers an immediate theme reload.
+    pub fn set_force_palette(&mut self, path: Option<String>) -> Result<()> {
+        match self.request(&Request::SetForcePalette { path })? {
+            Response::Ok => Ok(()),
+            other => Err(Error::UnexpectedResponse(other)),
+        }
+    }
+
     pub fn reload(&mut self) -> Result<()> {
         match self.request(&Request::Reload)? {
             Response::Ok => Ok(()),

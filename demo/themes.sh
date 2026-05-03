@@ -39,35 +39,53 @@ for THEME in "${THEMES[@]}"; do
     sleep 3.0
 done
 
-# Force-palette overlay verification. The 'random' palette in
+# Force-palette overlay live demo. The 'random' palette in
 # themes/_palettes/random.kdl is deliberately gaudy (hot pink, cyan,
-# lemon) so any theme with the overlay applied is visually obvious.
-# To exercise this for real you'd start the daemon with
-# `--force-palette themes/_palettes/random.kdl` (or set
-# `force_palette = "..."` in awob.toml). The current daemon may not
-# have it set; this section just sends OSDs against whatever
-# overlay is in effect so a side-by-side run with/without is easy.
-say "force-palette demo (the colours below depend on the daemon's overlay)"
-note "with no overlay: theme's own palette."
-note "with --force-palette themes/_palettes/random.kdl: hot pink + cyan + lemon."
-"$AWOB" send --preempt --source "$SRC" --icon audio-volume-medium --app "Speakers" volume 0.55 1.0
+# lemon) so the overlay is visually obvious. We toggle it via
+# `awob force-palette set/clear`, fire several events across
+# different styles + values, then turn it off.
+say "force-palette: ON"
+RANDOM_PALETTE="$(realpath "$(dirname "$0")/../themes/_palettes/random.kdl")"
+"$AWOB" force-palette set "$RANDOM_PALETTE"
+sleep 0.4
+note "every send below uses the gaudy overlay — pink/cyan/lemon."
+for V in 0.20 0.55 0.85; do
+    "$AWOB" send --preempt --source "$SRC" --icon audio-volume-medium \
+        --app "FORCE-PALETTE: random" volume "$V" 1.0
+    sleep 1.6
+done
+"$AWOB" send --preempt --source "$SRC" --icon audio-volume-muted \
+    --app "FORCE-PALETTE + critical style" --style critical mute 1 1
+sleep 1.6
+"$AWOB" send --preempt --source "$SRC" --icon battery-low \
+    --app "FORCE-PALETTE + warn style" --style warn battery 0.20 1.0
+sleep 1.6
+
+say "hot-redraw-while-visible — overlay change repaints the live OSD"
+note "long-timeout OSD with random overlay, clear overlay mid-show,"
+note "watch the visible OSD repaint with the theme's native palette."
+"$AWOB" send --preempt --source "$SRC" --timeout 4000 \
+    --icon audio-volume-medium --app "RANDOM overlay (4s show)" volume 0.45 1.0
+sleep 1.5
+note "clearing force-palette while OSD is still visible..."
+"$AWOB" force-palette clear
+sleep 4.0
+
+say "force-palette: OFF (back to theme's native palette)"
+"$AWOB" send --preempt --source "$SRC" --icon audio-volume-high \
+    --app "Native palette restored" volume 0.85 1.0
 sleep 3.0
 
-# Hot-reload during a visible OSD. Send a long-timeout OSD, switch
-# the theme via IPC while it's still on screen, and immediately fire
-# another OSD on the new theme. The first one keeps its theme until
-# fade-out (current behaviour); the second one renders on the new
-# theme.
-say "hot-reload-while-visible — first OSD on theme A, theme switches mid-show, second OSD on theme B"
+# Hot-redraw via theme switch — same idea, switching the whole
+# theme rather than just the palette. The visible OSD repaints
+# instantly with the new theme.
+say "hot-redraw-while-visible — theme switch repaints the live OSD"
 "$AWOB" theme set default
 "$AWOB" send --preempt --source "$SRC" --timeout 4000 \
     --icon audio-volume-medium --app "DEFAULT theme (4s show)" volume 0.55 1.0
 sleep 1.5
 note "switching to console theme while default OSD is still visible..."
 "$AWOB" theme set console
-sleep 0.4
-"$AWOB" send --preempt --source "$SRC" \
-    --icon audio-volume-high --app "CONSOLE theme" volume 0.85 1.0
 sleep 4.0
 
 # Restore. Pick "default" as a safe target — the originally-active

@@ -40,6 +40,14 @@ pub enum Request {
     /// fallback. Each entry carries metadata derived from the theme's
     /// optional `manifest.toml`.
     ThemeList,
+    /// Set or clear the runtime force-palette overlay. `Some(path)`
+    /// installs the file as the active overlay; `None` clears any
+    /// existing overlay. Either change triggers a theme reload so
+    /// the next render reflects the new colour scheme.
+    SetForcePalette {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path: Option<String>,
+    },
     Reload,
     Version,
 }
