@@ -10,22 +10,34 @@ listener see [Protocol](/protocol).
 
 ## Architecture
 
-```
-┌─────────────────────┐     unix socket      ┌──────────────────────┐
-│  awob-listener-*    │ ──── JSON-lines ────▶│  awob-daemon         │
-│  (pipewire, upower, │                       │  - history map        │
-│   backlight, …)     │                       │  - theme + bindings   │
-└─────────────────────┘                       │  - wlr-layer-shell    │
-                                              │    surface (one OSD)  │
-┌─────────────────────┐                       │  - listener supervisor│
-│  awob (CLI)         │ ─────────────────────▶│                       │
-│  awob send …        │                       └───────────┬───────────┘
-└─────────────────────┘                                   │
-                                                          ▼
-                                                   ┌──────────────┐
-                                                   │  Wayland     │
-                                                   │  compositor  │
-                                                   └──────────────┘
+```mermaid
+flowchart LR
+    subgraph clients["Clients"]
+        L["awob-listener-*<br/><small>pipewire · upower · backlight ·<br/>keyboard-backlight · wob-fifo</small>"]
+        C["awob (CLI)<br/><small>send · query · theme</small>"]
+    end
+
+    subgraph daemon["awob-daemon"]
+        direction TB
+        H["history map<br/>(source, event)"]
+        T["theme + bindings<br/>renderer"]
+        S["wlr-layer-shell<br/>surface"]
+        SUP["listener supervisor<br/>(auto-discovery)"]
+    end
+
+    W["Wayland compositor"]
+
+    L -->|JSON-lines<br/>unix socket| daemon
+    C -->|JSON-lines<br/>unix socket| daemon
+    daemon --> W
+    SUP -.spawns.-> L
+
+    classDef box fill:#1c1c23,stroke:#5fff5f,color:#f3e8d7;
+    classDef daemonBox fill:#11212f,stroke:#baea96,color:#f3e8d7;
+    classDef wayland fill:#1a1a22,stroke:#888,color:#f3e8d7;
+    class L,C box;
+    class H,T,S,SUP daemonBox;
+    class W wayland;
 ```
 
 * **`awob-daemon`** owns the surface and the IPC socket. One per

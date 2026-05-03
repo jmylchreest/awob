@@ -1,0 +1,191 @@
+/**
+ * Homepage layout — modeled on jmylchreest/tinct's hero pattern:
+ * subtle grid background, large mixed-colour wordmark, code window
+ * with traffic-light dots, two-button hero CTA, feature grid below.
+ */
+
+.heroSection {
+  position: relative;
+  padding: 6rem 1rem 4rem;
+  text-align: center;
+  background:
+    linear-gradient(rgba(0, 0, 0, 0.85), rgba(0, 0, 0, 0.85)),
+    repeating-linear-gradient(
+      0deg,
+      transparent 0,
+      transparent 39px,
+      rgba(255, 255, 255, 0.04) 39px,
+      rgba(255, 255, 255, 0.04) 40px
+    ),
+    repeating-linear-gradient(
+      90deg,
+      transparent 0,
+      transparent 39px,
+      rgba(255, 255, 255, 0.04) 39px,
+      rgba(255, 255, 255, 0.04) 40px
+    );
+  background-color: #0d0d12;
+  color: #f3e8d7;
+  overflow: hidden;
+}
+
+[data-theme="light"] .heroSection {
+  background:
+    linear-gradient(rgba(255, 255, 255, 0.92), rgba(255, 255, 255, 0.92)),
+    repeating-linear-gradient(
+      0deg,
+      transparent 0,
+      transparent 39px,
+      rgba(0, 0, 0, 0.04) 39px,
+      rgba(0, 0, 0, 0.04) 40px
+    ),
+    repeating-linear-gradient(
+      90deg,
+      transparent 0,
+      transparent 39px,
+      rgba(0, 0, 0, 0.04) 39px,
+      rgba(0, 0, 0, 0.04) 40px
+    );
+  background-color: #f6f1e8;
+  color: #1a1a1a;
+}
+
+.wordmark {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: clamp(4rem, 14vw, 7rem);
+  font-weight: 700;
+  letter-spacing: -0.04em;
+  line-height: 1;
+  margin: 0 0 0.5rem;
+}
+
+.wordmark .accent {
+  color: var(--ifm-color-primary);
+}
+
+.tagline {
+  font-size: 1.25rem;
+  margin: 0 0 0.75rem;
+  opacity: 0.9;
+}
+
+.expanded {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.95rem;
+  margin: 0 0 2.5rem;
+  opacity: 0.6;
+}
+
+.expanded strong {
+  font-weight: 700;
+  opacity: 1;
+  color: var(--ifm-color-primary);
+}
+
+.heroButtons {
+  display: flex;
+  gap: 1rem;
+  justify-content: center;
+  flex-wrap: wrap;
+  margin-bottom: 3rem;
+}
+
+/* Terminal window — mimics a desktop terminal app with a coloured
+ * title bar containing three traffic-light dots, then the OSD
+ * preview rendered inside as monospace ASCII. */
+
+.terminal {
+  display: inline-block;
+  text-align: left;
+  width: min(640px, 92vw);
+  margin: 0 auto;
+  border-radius: 10px;
+  overflow: hidden;
+  background: #1c1c23;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow:
+    0 24px 64px rgba(0, 0, 0, 0.45),
+    0 1px 2px rgba(255, 255, 255, 0.04) inset;
+}
+
+[data-theme="light"] .terminal {
+  background: #1c1c23;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+}
+
+.terminalBar {
+  background: #2a2a33;
+  padding: 0.5rem 0.85rem;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.terminalDot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.terminalTitle {
+  margin-left: auto;
+  margin-right: auto;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.8rem;
+  color: rgba(243, 232, 215, 0.55);
+}
+
+.terminalBody {
+  padding: 1.25rem 1.5rem;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.95rem;
+  line-height: 1.6;
+  color: #f3e8d7;
+  white-space: pre;
+  overflow-x: auto;
+}
+
+.terminalPrompt {
+  color: var(--ifm-color-primary);
+  font-weight: 700;
+}
+
+/* Feature grid below the hero. Three columns of brief value props. */
+
+.features {
+  padding: 4rem 1rem;
+  background: var(--ifm-background-color);
+}
+
+.featureGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 2rem;
+  max-width: 1100px;
+  margin: 0 auto;
+}
+
+.feature {
+  padding: 1.5rem;
+  border-radius: 8px;
+  border: 1px solid var(--ifm-color-emphasis-200);
+  background: var(--ifm-card-background-color, var(--ifm-background-color));
+}
+
+.feature h3 {
+  margin: 0 0 0.5rem;
+  font-size: 1.1rem;
+}
+
+.feature p {
+  margin: 0;
+  opacity: 0.85;
+  font-size: 0.95rem;
+}
+
+.featuresHeader {
+  text-align: center;
+  margin: 0 0 2.5rem;
+  font-size: 1.75rem;
+}

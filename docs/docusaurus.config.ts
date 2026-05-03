@@ -19,6 +19,13 @@ const config: Config = {
   onBrokenLinks: "throw",
   onBrokenMarkdownLinks: "warn",
 
+  // Enable Mermaid for architecture / flow diagrams in markdown.
+  // Use ```mermaid fenced blocks; the theme handles client-side
+  // rendering via mermaid.js.
+  markdown: {
+    mermaid: true,
+  },
+
   i18n: {
     defaultLocale: "en",
     locales: ["en"],
@@ -43,6 +50,7 @@ const config: Config = {
   ],
 
   themes: [
+    "@docusaurus/theme-mermaid",
     [
       // @easyops-cn/docusaurus-search-local supports Docusaurus 3.x
       // (the older @cmfcmf/docusaurus-search-local pins to v2). Local
@@ -58,13 +66,10 @@ const config: Config = {
   ],
 
   themeConfig: {
-    image: "img/social-card.png",
+    // No logo image — `title: "awob"` renders as plain text in the
+    // navbar. The site identity is the wordmark on the homepage.
     navbar: {
       title: "awob",
-      logo: {
-        alt: "awob logo",
-        src: "img/logo.svg",
-      },
       items: [
         {
           type: "docSidebar",

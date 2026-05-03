@@ -1,19 +1,37 @@
 /**
  * awob docs theme overrides. Built on top of Docusaurus's classic
- * theme. Tweaks: punchier accent, code-block tone matched to the
- * "tinct" palette the daemon ships with.
+ * theme. Pulls in Inter for body + JetBrains Mono for code so the
+ * site visual matches the daemon's default theme typography.
  */
 
+@import url("https://rsms.me/inter/inter.css");
+@import url("https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap");
+
 :root {
-  --ifm-color-primary: #5a9c54;
-  --ifm-color-primary-dark: #50864b;
-  --ifm-color-primary-darker: #4b7e47;
-  --ifm-color-primary-darkest: #3d683a;
-  --ifm-color-primary-light: #6db367;
-  --ifm-color-primary-lighter: #79bc73;
-  --ifm-color-primary-lightest: #94cd8f;
+  --ifm-font-family-base: "Inter", system-ui, -apple-system, "Segoe UI",
+    Roboto, "Helvetica Neue", Arial, sans-serif;
+  --ifm-font-family-monospace: "JetBrains Mono", ui-monospace, "SF Mono",
+    Menlo, Consolas, monospace;
+  --ifm-color-primary: #2a5e26;
+  --ifm-color-primary-dark: #265523;
+  --ifm-color-primary-darker: #245021;
+  --ifm-color-primary-darkest: #1d421b;
+  --ifm-color-primary-light: #2e6729;
+  --ifm-color-primary-lighter: #306b2b;
+  --ifm-color-primary-lightest: #387732;
   --ifm-code-font-size: 92%;
+  --ifm-heading-font-weight: 700;
+  --ifm-h1-font-size: 2.25rem;
+  --ifm-h2-font-size: 1.75rem;
+  --ifm-h3-font-size: 1.25rem;
   --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.08);
+}
+
+@supports (font-variation-settings: normal) {
+  :root {
+    --ifm-font-family-base: "Inter var", system-ui, -apple-system,
+      "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  }
 }
 
 [data-theme="dark"] {
@@ -24,5 +42,28 @@
   --ifm-color-primary-light: #cceeae;
   --ifm-color-primary-lighter: #d5f1bb;
   --ifm-color-primary-lightest: #ebf8de;
+  --ifm-background-color: #14141a;
+  --ifm-background-surface-color: #1a1a22;
   --docusaurus-highlighted-code-line-bg: rgba(255, 255, 255, 0.08);
+}
+
+/* Tighter body line-height for legibility at the wider line lengths
+ * docusaurus content tends to produce. */
+body {
+  font-feature-settings: "cv05", "cv11", "ss01", "ss03";
+  -webkit-font-smoothing: antialiased;
+}
+
+.markdown h1,
+.markdown h2,
+.markdown h3 {
+  letter-spacing: -0.01em;
+}
+
+/* Code blocks render with the JetBrains Mono ligatures we loaded. */
+code,
+pre,
+kbd {
+  font-family: var(--ifm-font-family-monospace);
+  font-feature-settings: "calt" 1, "ss05" 1;
 }
