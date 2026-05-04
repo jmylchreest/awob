@@ -245,6 +245,15 @@ jobs:
     # Matrix-publish every AUR package on stable tag pushes. Snapshot
     # prereleases (workflow_dispatch on main) skip — that history would
     # be too noisy on AUR.
+    #
+    # awob-git is special-cased: its PKGBUILD doesn't carry @VERSION@
+    # placeholders (pkgver() runs at install-time against `git describe`
+    # on the user's clone), so the file we'd push is byte-identical to
+    # the previous release's unless someone edits the template. Pushing
+    # an "empty" release: vX.Y.Z commit on every tag is just noise on
+    # AUR, so we skip awob-git when contrib/aur/PKGBUILD-git is
+    # unchanged since the previous tag. Every other package is
+    # rendered with the new VERSION + SHA256 so it always differs.
     name: publish ${{ matrix.pkgname }} to AUR
     needs: [prepare, package-aur]
     runs-on: ubuntu-latest
@@ -262,12 +271,38 @@ jobs:
           - awob-listeners-all
           - awob-git
     steps:
+      - uses: actions/checkout@v4
+        if: matrix.pkgname == 'awob-git'
+        with:
+          fetch-depth: 0
+
+      - name: Skip awob-git if PKGBUILD-git unchanged since previous tag
+        id: changed
+        if: matrix.pkgname == 'awob-git'
+        run: |
+          set -euo pipefail
+          prev=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          if [[ -z "$prev" ]]; then
+            echo "first tagged release; pushing"
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if git diff --quiet "$prev" HEAD -- contrib/aur/PKGBUILD-git; then
+            echo "::notice::contrib/aur/PKGBUILD-git unchanged since $prev — skipping awob-git AUR push"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "contrib/aur/PKGBUILD-git changed since $prev — pushing"
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: actions/download-artifact@v4
+        if: matrix.pkgname != 'awob-git' || steps.changed.outputs.skip != 'true'
         with:
           name: awob-${{ needs.prepare.outputs.version }}-aur-staged
           path: aur-staged
 
       - name: Publish ${{ matrix.pkgname }} to AUR
+        if: matrix.pkgname != 'awob-git' || steps.changed.outputs.skip != 'true'
         uses: KSXGitHub/github-actions-deploy-aur@v4.1.3
         with:
           pkgname: ${{ matrix.pkgname }}
