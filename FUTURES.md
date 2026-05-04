@@ -174,33 +174,6 @@ Done. CI + release pipelines now gate on `cargo clippy --workspace
 --check`. This entry retired.
 
 
-## FFI: expose theme management + query
-
-The `awob-client-ffi` crate currently exports a *send-only* surface:
-`awob_connect` / `awob_connect_to`, the `awob_send_*` builder, the
-`awob_send_dispatch` call, plus `awob_hello`, version readers, and
-error reporting. Six SDK methods aren't FFI-exposed yet:
-
-* `query(source)` → list history entries
-* `set_theme(name)` / `set_theme_with(name, persist)`
-* `theme_list()`
-* `set_force_palette(path)` / `clear`
-* `reload()`
-* `version()`
-
-To match the CLI's reach, an FFI client needs all six. Each is a
-~15 LOC C wrapper plus a cbindgen declaration. Defer until a real
-FFI consumer asks (current consumers are all Rust).
-
-
-## FFI consumers beyond C
-
-The `awob-client-ffi` crate exposes a C ABI via `cbindgen`. Bindings for
-Python (cffi/ctypes), Swift, and Kotlin can be generated via UniFFI later
-if anyone wants them. C ABI is the universal substrate so this is
-opportunity rather than necessity.
-
-
 ## D-Bus integration: opt-in compatibility modes
 
 Researched: there is **no freedesktop.org standard** for OSD events on
