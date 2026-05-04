@@ -151,12 +151,12 @@ impl Supervisor {
             std::thread::sleep(poll);
         }
         for (name, state) in self.children.iter_mut() {
-            if let Some(mut p) = state.process.take() {
-                if matches!(p.try_wait(), Ok(None)) {
-                    tracing::info!("supervisor[{name}]: SIGKILL pid={}", p.id());
-                    let _ = p.kill();
-                    let _ = p.wait();
-                }
+            if let Some(mut p) = state.process.take()
+                && matches!(p.try_wait(), Ok(None))
+            {
+                tracing::info!("supervisor[{name}]: SIGKILL pid={}", p.id());
+                let _ = p.kill();
+                let _ = p.wait();
             }
         }
     }

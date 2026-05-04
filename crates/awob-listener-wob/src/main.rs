@@ -67,11 +67,11 @@ fn parse_line(s: &str) -> Option<(f64, Option<f64>, Option<String>)> {
     let mut max = None;
     let mut style = None;
     for tok in it {
-        if let Ok(n) = tok.parse::<f64>() {
-            if max.is_none() {
-                max = Some(n);
-                continue;
-            }
+        if let Ok(n) = tok.parse::<f64>()
+            && max.is_none()
+        {
+            max = Some(n);
+            continue;
         }
         style = Some(tok.to_string());
         break;

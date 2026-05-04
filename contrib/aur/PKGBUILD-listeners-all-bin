@@ -23,6 +23,7 @@ depends=(
     'awob-listener-backlight-bin'
     'awob-listener-keyboard-backlight-bin'
     'awob-listener-wob-bin'
+    'awob-listener-power-profile-bin'
 )
 
 # No source / no install — depends-only meta-package.

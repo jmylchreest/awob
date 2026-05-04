@@ -31,14 +31,16 @@ ConditionEnvironment=WAYLAND_DISPLAY
 
 [Service]
 Type=simple
-# Defensive cleanup — if a previous instance was SIGKILL'd or the
-# system was hard-rebooted, the socket file lingers and the next
-# bind() fails with EADDRINUSE. The leading `-` makes the failure
-# tolerated (no socket present is fine). The daemon also unlinks
-# stale sockets internally, but the in-process cleanup needs write
-# access to the runtime dir (granted by the broader ReadWritePaths
-# below) — this ExecStartPre is the belt to that braces.
-ExecStartPre=-/usr/bin/rm -f %t/awob.sock
+# Stale-socket handling lives in the daemon (`Server::bind` in
+# `crates/awob-daemon/src/ipc.rs`): on startup, if a socket file
+# exists at the bind path, the daemon connect-probes it. A live
+# daemon there → bail with `IpcError::AlreadyRunning`. A stale
+# leftover (ConnectionRefused / NotFound) → unlink and rebind. This
+# logic runs regardless of how the daemon was started — systemd,
+# `exec-once = awob-daemon` from a Hyprland config, or a bare CLI
+# launch — so it's the single source of truth. No ExecStartPre
+# needed; cleaning the socket from the unit only would leave non-
+# systemd starts subject to the same race.
 ExecStart=%h/.cargo/bin/awob-daemon
 Restart=on-failure
 RestartSec=2

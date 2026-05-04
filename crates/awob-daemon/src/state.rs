@@ -106,14 +106,13 @@ impl History {
                 if source_now_empty {
                     self.by_source.remove(&src);
                 }
-                if source_now_empty {
-                    if let Some(lid) = lid {
-                        if let Some(set) = self.by_listener.get_mut(&lid) {
-                            set.remove(&src);
-                            if set.is_empty() {
-                                self.by_listener.remove(&lid);
-                            }
-                        }
+                if source_now_empty
+                    && let Some(lid) = lid
+                    && let Some(set) = self.by_listener.get_mut(&lid)
+                {
+                    set.remove(&src);
+                    if set.is_empty() {
+                        self.by_listener.remove(&lid);
                     }
                 }
             }

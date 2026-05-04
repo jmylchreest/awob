@@ -127,6 +127,7 @@ jobs:
                      awob-listener-battery \
                      awob-listener-backlight \
                      awob-listener-keyboard-backlight \
+                     awob-listener-power-profile \
                      awob-listener-wob; do
               cp "target/${TARGET}/release/${bin}" "$stage/bin/"
           done
@@ -191,13 +192,14 @@ jobs:
                  "release-aur/awob-${VERSION}.${pkgname}.PKGBUILD"
           }
 
-          render PKGBUILD-bin                            awob-bin
-          render PKGBUILD-listener-pipewire-bin          awob-listener-pipewire-bin
-          render PKGBUILD-listener-battery-bin           awob-listener-battery-bin
-          render PKGBUILD-listener-backlight-bin         awob-listener-backlight-bin
-          render PKGBUILD-listener-keyboard-backlight-bin awob-listener-keyboard-backlight-bin
-          render PKGBUILD-listener-wob-bin               awob-listener-wob-bin
-          render PKGBUILD-listeners-all-bin              awob-listeners-all
+          render PKGBUILD-bin                              awob-bin
+          render PKGBUILD-listener-pipewire-bin            awob-listener-pipewire-bin
+          render PKGBUILD-listener-battery-bin             awob-listener-battery-bin
+          render PKGBUILD-listener-backlight-bin           awob-listener-backlight-bin
+          render PKGBUILD-listener-keyboard-backlight-bin  awob-listener-keyboard-backlight-bin
+          render PKGBUILD-listener-power-profile-bin       awob-listener-power-profile-bin
+          render PKGBUILD-listener-wob-bin                 awob-listener-wob-bin
+          render PKGBUILD-listeners-all-bin                awob-listeners-all
 
           # awob-git is unrendered (no @VERSION@ to substitute beyond
           # the comment block), but ship it so the meta-set is complete.
@@ -267,6 +269,7 @@ jobs:
           - awob-listener-battery-bin
           - awob-listener-backlight-bin
           - awob-listener-keyboard-backlight-bin
+          - awob-listener-power-profile-bin
           - awob-listener-wob-bin
           - awob-listeners-all
           - awob-git

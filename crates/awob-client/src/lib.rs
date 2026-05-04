@@ -250,12 +250,11 @@ impl Send {
     /// Listener binaries call this on every send so the daemon can detect
     /// duplicate listener instances.
     pub fn auto_listener_id(mut self) -> Self {
-        if self.inner.listener_id.is_none() {
-            if let Ok(p) = std::env::current_exe() {
-                if let Some(n) = p.file_name().and_then(|s| s.to_str()) {
-                    self.inner.listener_id = Some(n.to_string());
-                }
-            }
+        if self.inner.listener_id.is_none()
+            && let Ok(p) = std::env::current_exe()
+            && let Some(n) = p.file_name().and_then(|s| s.to_str())
+        {
+            self.inner.listener_id = Some(n.to_string());
         }
         self
     }

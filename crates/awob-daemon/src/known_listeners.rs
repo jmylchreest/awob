@@ -41,12 +41,12 @@ pub const KNOWN_LISTENERS: &[KnownListener] = &[
 /// sibling listeners without modifying `PATH`), then `$PATH` entries in
 /// order.
 pub fn resolve_binary(binary_name: &str) -> Option<PathBuf> {
-    if let Ok(daemon_path) = std::env::current_exe() {
-        if let Some(dir) = daemon_path.parent() {
-            let candidate = dir.join(binary_name);
-            if is_executable_file(&candidate) {
-                return Some(candidate);
-            }
+    if let Ok(daemon_path) = std::env::current_exe()
+        && let Some(dir) = daemon_path.parent()
+    {
+        let candidate = dir.join(binary_name);
+        if is_executable_file(&candidate) {
+            return Some(candidate);
         }
     }
     let path_env = std::env::var_os("PATH")?;

@@ -316,19 +316,18 @@ impl Renderer {
         alpha_mul: f32,
         pm: &mut Pixmap,
     ) -> Result<(), RenderError> {
-        if let Some(shadow_attr) = &r.shadow {
-            if let Ok(s) = shadow_attr.render(b) {
-                if let Some(spec) = crate::shadow::parse(&s) {
-                    let bb = resolve_box(&r.common, &r.size, frame, b)?;
-                    let radius = r
-                        .radius
-                        .as_ref()
-                        .map(|a| a.render_number(b))
-                        .transpose()?
-                        .unwrap_or(0.0) as f32;
-                    self.draw_shadow(pm, bb, radius, spec);
-                }
-            }
+        if let Some(shadow_attr) = &r.shadow
+            && let Ok(s) = shadow_attr.render(b)
+            && let Some(spec) = crate::shadow::parse(&s)
+        {
+            let bb = resolve_box(&r.common, &r.size, frame, b)?;
+            let radius = r
+                .radius
+                .as_ref()
+                .map(|a| a.render_number(b))
+                .transpose()?
+                .unwrap_or(0.0) as f32;
+            self.draw_shadow(pm, bb, radius, spec);
         }
         draw_rect(r, frame, b, alpha_mul, pm)
     }
@@ -436,16 +435,16 @@ fn draw_rect(
         .and_then(|a| try_render_colour(a, b))
         .unwrap_or(Colour::TRANSPARENT);
     fill_rounded_rect(pm, bb, radius, with_alpha(fill, alpha_mul));
-    if let Some(stroke_attr) = &r.stroke {
-        if let Some(stroke_color) = try_render_colour(stroke_attr, b) {
-            let sw = r
-                .stroke_width
-                .as_ref()
-                .map(|a| a.render_number(b))
-                .transpose()?
-                .unwrap_or(1.0) as f32;
-            stroke_rounded_rect(pm, bb, radius, sw, with_alpha(stroke_color, alpha_mul));
-        }
+    if let Some(stroke_attr) = &r.stroke
+        && let Some(stroke_color) = try_render_colour(stroke_attr, b)
+    {
+        let sw = r
+            .stroke_width
+            .as_ref()
+            .map(|a| a.render_number(b))
+            .transpose()?
+            .unwrap_or(1.0) as f32;
+        stroke_rounded_rect(pm, bb, radius, sw, with_alpha(stroke_color, alpha_mul));
     }
     Ok(())
 }
@@ -857,10 +856,10 @@ scene {
         b.palette = theme.palette.clone();
         let _ = crate::theme::apply_style(theme, &mut b, "normal");
         // Bar reads accent from bindings; map style override to a literal colour.
-        if let Value::String(name) = b.get("accent") {
-            if let Some(c) = b.palette.get(&name).copied() {
-                b.set("accent", Value::Colour(c));
-            }
+        if let Value::String(name) = b.get("accent")
+            && let Some(c) = b.palette.get(&name).copied()
+        {
+            b.set("accent", Value::Colour(c));
         }
         b
     }

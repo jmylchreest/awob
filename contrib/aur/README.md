@@ -11,6 +11,7 @@ listener at once, and a from-source VCS build.
 | `awob-listener-battery-bin` | `PKGBUILD-listener-battery-bin` | Battery + AC state listener. |
 | `awob-listener-backlight-bin` | `PKGBUILD-listener-backlight-bin` | Display backlight listener. |
 | `awob-listener-keyboard-backlight-bin` | `PKGBUILD-listener-keyboard-backlight-bin` | Keyboard backlight listener. |
+| `awob-listener-power-profile-bin` | `PKGBUILD-listener-power-profile-bin` | Power-profile listener (ACPI `platform_profile`). |
 | `awob-listener-wob-bin` | `PKGBUILD-listener-wob-bin` | wob-protocol FIFO bridge. |
 | `awob-listeners-all` | `PKGBUILD-listeners-all-bin` | Meta-package — depends on every `awob-listener-*-bin`. No payload. |
 | `awob-git` | `PKGBUILD-git` | From-source kitchen-sink build of `main`. Installs daemon + CLI + every official listener + themes + systemd unit. |

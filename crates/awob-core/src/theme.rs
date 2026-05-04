@@ -491,15 +491,15 @@ fn parse_size(node: &KdlNode) -> Result<Sized, ThemeError> {
 
 fn attr(node: &KdlNode, name: &str) -> Result<Option<AttrValue>, ThemeError> {
     for e in node.entries() {
-        if let Some(n) = e.name() {
-            if n.value() == name {
-                let raw = entry_value_to_string(e);
-                let av = AttrValue::parse(raw).map_err(|err| ThemeError::Expr {
-                    at: format!("{}.{}", node.name().value(), name),
-                    source: err,
-                })?;
-                return Ok(Some(av));
-            }
+        if let Some(n) = e.name()
+            && n.value() == name
+        {
+            let raw = entry_value_to_string(e);
+            let av = AttrValue::parse(raw).map_err(|err| ThemeError::Expr {
+                at: format!("{}.{}", node.name().value(), name),
+                source: err,
+            })?;
+            return Ok(Some(av));
         }
     }
     Ok(None)
@@ -511,10 +511,10 @@ fn req_attr(node: &KdlNode, name: &str, kind: &str) -> Result<AttrValue, ThemeEr
 
 fn attr_str(node: &KdlNode, name: &str) -> Option<String> {
     for e in node.entries() {
-        if let Some(n) = e.name() {
-            if n.value() == name {
-                return Some(entry_value_to_string(e));
-            }
+        if let Some(n) = e.name()
+            && n.value() == name
+        {
+            return Some(entry_value_to_string(e));
         }
     }
     None
@@ -522,10 +522,10 @@ fn attr_str(node: &KdlNode, name: &str) -> Option<String> {
 
 fn attr_int(node: &KdlNode, name: &str) -> Option<i64> {
     for e in node.entries() {
-        if let Some(n) = e.name() {
-            if n.value() == name {
-                return e.value().as_integer().map(|i| i as i64);
-            }
+        if let Some(n) = e.name()
+            && n.value() == name
+        {
+            return e.value().as_integer().map(|i| i as i64);
         }
     }
     None
@@ -538,21 +538,21 @@ fn attr_int(node: &KdlNode, name: &str) -> Option<i64> {
 /// — so the string form is the recommended user-facing syntax.
 fn attr_bool(node: &KdlNode, name: &str) -> Option<bool> {
     for e in node.entries() {
-        if let Some(n) = e.name() {
-            if n.value() == name {
-                if let Some(b) = e.value().as_bool() {
-                    return Some(b);
-                }
-                if let Some(s) = e.value().as_string() {
-                    return match s.trim().to_ascii_lowercase().as_str() {
-                        "true" | "yes" | "on" | "1" => Some(true),
-                        "false" | "no" | "off" | "0" => Some(false),
-                        _ => None,
-                    };
-                }
-                if let Some(i) = e.value().as_integer() {
-                    return Some(i != 0);
-                }
+        if let Some(n) = e.name()
+            && n.value() == name
+        {
+            if let Some(b) = e.value().as_bool() {
+                return Some(b);
+            }
+            if let Some(s) = e.value().as_string() {
+                return match s.trim().to_ascii_lowercase().as_str() {
+                    "true" | "yes" | "on" | "1" => Some(true),
+                    "false" | "no" | "off" | "0" => Some(false),
+                    _ => None,
+                };
+            }
+            if let Some(i) = e.value().as_integer() {
+                return Some(i != 0);
             }
         }
     }

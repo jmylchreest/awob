@@ -8,7 +8,7 @@ edition = "2024"
 license = "MIT"
 repository = "https://github.com/jmylchreest/awob"
 authors = ["John Mylchreest <jmylchreest@gmail.com>"]
-rust-version = "1.85"
+rust-version = "1.95"
 
 [workspace.dependencies]
 # Internal

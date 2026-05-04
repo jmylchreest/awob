@@ -563,12 +563,12 @@ impl<'a> Parser<'a> {
                 if ch == c {
                     return Ok(Expr::Str(s));
                 }
-                if ch == '\\' {
-                    if let Some(esc) = self.peek() {
-                        self.pos += esc.len_utf8();
-                        s.push(esc);
-                        continue;
-                    }
+                if ch == '\\'
+                    && let Some(esc) = self.peek()
+                {
+                    self.pos += esc.len_utf8();
+                    s.push(esc);
+                    continue;
                 }
                 s.push(ch);
             }

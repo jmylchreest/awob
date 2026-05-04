@@ -19,13 +19,13 @@ pub struct ThemeWatcher {
 impl ThemeWatcher {
     pub fn new(reload_tx: Sender<()>) -> notify::Result<Self> {
         let inner = notify::recommended_watcher(move |res: notify::Result<Event>| {
-            if let Ok(ev) = res {
-                if matches!(
+            if let Ok(ev) = res
+                && matches!(
                     ev.kind,
                     EventKind::Modify(_) | EventKind::Create(_) | EventKind::Remove(_)
-                ) {
-                    let _ = reload_tx.send(());
-                }
+                )
+            {
+                let _ = reload_tx.send(());
             }
         })?;
         Ok(Self {

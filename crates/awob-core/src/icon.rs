@@ -106,12 +106,12 @@ impl IconResolver {
     }
 
     fn insert_cache(&mut self, key: (String, u32, u32), value: Pixmap, was_symbolic: bool) {
-        if self.cache.len() >= CACHE_CAP {
-            if let Some(old) = self.order.first().cloned() {
-                self.cache.remove(&old);
-                self.was_symbolic.remove(&old);
-                self.order.remove(0);
-            }
+        if self.cache.len() >= CACHE_CAP
+            && let Some(old) = self.order.first().cloned()
+        {
+            self.cache.remove(&old);
+            self.was_symbolic.remove(&old);
+            self.order.remove(0);
         }
         self.cache.insert(key.clone(), value);
         self.was_symbolic.insert(key.clone(), was_symbolic);
@@ -151,10 +151,10 @@ impl IconResolver {
         // canonical name; if that *also* fails, fall through to the
         // embedded SVG. Recursion is bounded — we only ever recurse with
         // `FALLBACK_ICON_NAME`, never deeper.
-        if src != FALLBACK_ICON_NAME {
-            if let Ok((pm, _)) = self.rasterise_with_meta(FALLBACK_ICON_NAME, w, h) {
-                return Ok((pm, true));
-            }
+        if src != FALLBACK_ICON_NAME
+            && let Ok((pm, _)) = self.rasterise_with_meta(FALLBACK_ICON_NAME, w, h)
+        {
+            return Ok((pm, true));
         }
         rasterise_svg(EMBEDDED_FALLBACK_SVG, w, h).map(|p| (p, true))
     }
@@ -334,7 +334,7 @@ fn base64_decode(s: &str) -> Result<Vec<u8>, ()> {
     let s = s.trim();
     let bytes = s.as_bytes();
     let len = bytes.len();
-    if len % 4 != 0 {
+    if !len.is_multiple_of(4) {
         return Err(());
     }
     let mut out = Vec::with_capacity(len / 4 * 3);

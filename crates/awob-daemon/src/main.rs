@@ -175,10 +175,10 @@ impl Shared {
                 // emit everything.
                 let mut entries = Vec::new();
                 for (src, _evt, e) in self.history.entries() {
-                    if let Some(filter) = source.as_deref() {
-                        if src != filter {
-                            continue;
-                        }
+                    if let Some(filter) = source.as_deref()
+                        && src != filter
+                    {
+                        continue;
                     }
                     entries.push(history_entry(src, e));
                 }
@@ -296,28 +296,28 @@ fn enumerate_themes(
     use awob_protocol::ThemeInfo;
     let mut out: Vec<ThemeInfo> = Vec::new();
 
-    if let Some(root) = themes_root {
-        if let Ok(read) = std::fs::read_dir(root) {
-            for entry in read.flatten() {
-                let dir = entry.path();
-                if !dir.is_dir() {
-                    continue;
-                }
-                let scene = dir.join("scene.kdl");
-                if !scene.exists() {
-                    continue;
-                }
-                let Some(name) = dir.file_name().and_then(|s| s.to_str()) else {
-                    continue;
-                };
-                let description = read_manifest_description(&dir.join("manifest.toml"));
-                out.push(ThemeInfo {
-                    name: name.to_string(),
-                    active: name == active_name,
-                    source: "disk".into(),
-                    description,
-                });
+    if let Some(root) = themes_root
+        && let Ok(read) = std::fs::read_dir(root)
+    {
+        for entry in read.flatten() {
+            let dir = entry.path();
+            if !dir.is_dir() {
+                continue;
             }
+            let scene = dir.join("scene.kdl");
+            if !scene.exists() {
+                continue;
+            }
+            let Some(name) = dir.file_name().and_then(|s| s.to_str()) else {
+                continue;
+            };
+            let description = read_manifest_description(&dir.join("manifest.toml"));
+            out.push(ThemeInfo {
+                name: name.to_string(),
+                active: name == active_name,
+                source: "disk".into(),
+                description,
+            });
         }
     }
     // Always surface the embedded default. If the on-disk version
