@@ -155,6 +155,7 @@ dependencies = [
  "calloop",
  "calloop-wayland-source",
  "clap",
+ "husky-rs",
  "memmap2 0.9.10",
  "nix 0.29.0",
  "notify",
@@ -821,6 +822,12 @@ name = "hermit-abi"
 version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc0fef456e4baa96da950455cd02c081ca953b141298e41db3fc7e36b1da849c"
+
+[[package]]
+name = "husky-rs"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "62b00c51c8ea1f7e8d93caaf071948f766eb331cd55cb9871096614c9291642e"
 
 [[package]]
 name = "id-arena"

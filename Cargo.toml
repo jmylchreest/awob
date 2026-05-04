@@ -22,6 +22,12 @@ awob-core = { path = "crates/awob-core" }
 tracing = { version = "0.1", default-features = false, features = ["std", "attributes"] }
 tracing-subscriber = { version = "0.3", default-features = false, features = ["std", "fmt", "env-filter"] }
 
+# Git hook manager. Wired in as a dev-dep on awob-daemon — its build
+# script copies hooks from `.husky/` into `.git/hooks/` whenever the
+# tests are built / run, so contributors get the pre-commit + pre-push
+# hooks automatically on `cargo test` (or `just install-hooks`).
+husky-rs = "0.3"
+
 [profile.release]
 # Size-optimised. The daemon renders 60fps OSDs which is well within
 # tiny-skia's perf even at opt-level=z, so we trade speed for binary size

@@ -1,0 +1,25 @@
+#!/bin/sh
+#
+# awob pre-push hook.
+#
+# Runs `cargo clippy --workspace --all-targets --locked -- -D warnings`
+# before push. Slower than pre-commit (5–30s on warm cache) so we
+# don't run it on every commit; cheaper than waiting for the CI
+# round-trip to reject a clippy-dirty branch.
+#
+# Skip with `git push --no-verify`.
+
+set -e
+
+if ! command -v cargo >/dev/null 2>&1; then
+    echo "pre-push: cargo not found on PATH; skipping clippy check" >&2
+    exit 0
+fi
+
+echo "pre-push: cargo clippy --workspace --all-targets --locked -- -D warnings"
+if ! cargo clippy --workspace --all-targets --locked -- -D warnings; then
+    echo
+    echo "pre-push: clippy found warnings or errors." >&2
+    echo "  fix the issues, or skip with: git push --no-verify" >&2
+    exit 1
+fi

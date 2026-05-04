@@ -40,13 +40,16 @@ lint:
     cargo fmt --all -- --check
     cargo clippy --workspace --all-targets --locked -- -D warnings
 
-# Install repo-managed git hooks (pre-commit runs `cargo fmt --check`).
-# Wires `core.hooksPath` to `scripts/git-hooks/`, so the hooks live in
-# version control and contributors get them automatically once they run
-# `just install-hooks` after cloning.
+# Install repo-managed git hooks (pre-commit: `cargo fmt --check`;
+# pre-push: `cargo clippy --workspace --all-targets --locked -- -D
+# warnings`). Hook scripts live in version control under `.husky/`;
+# the `husky-rs` dev-dep on awob-daemon copies them into `.git/hooks/`
+# via its build script the first time the daemon's tests are built.
+# This recipe just triggers that build step explicitly so the hooks
+# land without waiting for someone's first `cargo test`.
 install-hooks:
-    git config core.hooksPath scripts/git-hooks
-    @echo "git hooks: scripts/git-hooks (run \`git config --unset core.hooksPath\` to opt out)"
+    cargo test -p awob-daemon --no-run --quiet
+    @echo "git hooks: .husky/ (managed by husky-rs; copies into .git/hooks/ on cargo test build)"
 
 # Clippy with --fix + format. Wipes uncommitted changes if you don't
 # stage first — guard your work.

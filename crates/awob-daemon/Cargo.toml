@@ -40,3 +40,7 @@ nix = { version = "0.29", features = ["signal", "process"] }
 
 [dev-dependencies]
 tempfile = "3"
+# Triggers .husky/ → .git/hooks/ install via build script when the
+# daemon's tests are built. Lives here (vs every crate) because
+# awob-daemon is the foundational dev-target for the workspace.
+husky-rs = { workspace = true }

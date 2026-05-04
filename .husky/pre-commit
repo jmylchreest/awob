@@ -1,20 +1,19 @@
-#!/usr/bin/env bash
+#!/bin/sh
 #
 # awob pre-commit hook.
 #
-# Runs `cargo fmt --check` against the workspace so a commit can't
-# introduce a formatting drift that CI would reject. Fast (<1s on
-# warm cache) and offline.
+# Runs `cargo fmt --all -- --check` against the workspace so a commit
+# can't introduce a formatting drift that CI would reject. Fast (<1s
+# on warm cache) and offline.
 #
-# Install via `just install-hooks` (which sets `core.hooksPath` to
-# `scripts/git-hooks`). Skip on a per-commit basis with
-# `git commit --no-verify` — but please don't make a habit of it.
+# Install with `just install-hooks` (which sets `core.hooksPath` to
+# `.husky/`). Skip on a per-commit basis with `git commit --no-verify`.
 
-set -euo pipefail
+set -e
 
 # Allow merges, reverts, and CI rebases to bypass — formatting is the
 # author's responsibility, not the merger's.
-if [[ -f .git/MERGE_HEAD ]] || [[ -f .git/CHERRY_PICK_HEAD ]]; then
+if [ -f .git/MERGE_HEAD ] || [ -f .git/CHERRY_PICK_HEAD ]; then
     exit 0
 fi
 
