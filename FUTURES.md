@@ -123,27 +123,23 @@ could grow a `--default-only` flag that:
 Already done — listener is fully event-driven via pipewire-rs subscription.
 This entry retired.
 
-## Migrate backlight / keyboard-backlight listeners to udev
+## Migrate display backlight listener to additive monitor
 
-Currently the `awob-listener-backlight` and
-`awob-listener-keyboard-backlight` binaries watch their respective
-`brightness` sysfs files via the `notify` crate (inotify under the
-hood). This works because `brightness` is genuinely *written* by
-userspace tools (brightnessctl, xbrightness, ACPI hotkeys), so
-inotify fires.
+`awob-listener-keyboard-backlight` already runs the additive monitor
+pattern: inotify + udev + adaptive sysfs polling, all feeding one
+mpsc wake channel. It was needed because Framework laptops with the
+chromeos EC update sysfs without firing either inotify or udev.
 
-`awob-listener-battery` was migrated to udev because `capacity` and
-`status` are computed at read time and never fire inotify events.
+`awob-listener-backlight` (display) still only watches inotify on the
+brightness file. That's adequate today on every machine seen — every
+display backlight is changed via a userspace `write()` (brightnessctl
+etc) which fires inotify. But there's no architectural reason it
+shouldn't follow the same additive-monitor pattern, and a future
+firmware-driven display-brightness path (rare but possible) would
+silently miss events the same way kbd-backlight did on Framework.
 
-Possible follow-up: migrate the backlight + keyboard-backlight
-listeners to udev too, for architectural uniformity (every sysfs-
-aware listener using the same primitive). No responsiveness gain
-expected — both fire instantly on the relevant changes today.
-Trade-off: drops the `notify` dep across these two crates (~150 KB
-saved in compiled binary size); adds nothing the user sees.
-
-Cost: ~30 min per listener. Defer until consistency review or new
-contributor onboarding wants the simpler mental model.
+Cost: ~80 LOC porting the keyboard-backlight pattern. Defer until
+someone reports a real case.
 
 
 ## Bluetooth peripheral batteries (`awob-listener-bluetooth`)
@@ -278,3 +274,133 @@ binary is found, unless named in `[supervisor] disable = […]`. Listeners
 that need arguments to start (e.g. `awob-listener-wob`'s `--fifo`) are
 intentionally outside the auto registry — they require explicit
 `[[listeners]]` blocks.
+
+
+## Catalogue of additional listener crates (not yet built)
+
+awob's listener-per-event-source model is meant to grow. The current
+set covers the events most laptop users hit constantly (volume,
+brightness, battery, keyboard backlight, wob FIFO bridge). The
+following are honestly-considered next entries — each would be its
+own `awob-listener-<topic>` crate, supervised by the daemon, sending
+typed events over the same socket protocol.
+
+Grouped by upstream / mechanism rather than by user-facing event,
+because the mechanism dictates the shape of the listener.
+
+### `awob-listener-ups` — UPS state via UPower D-Bus
+
+USB HID UPSes (Eaton, APC, CyberPower etc) **don't appear under
+`/sys/class/power_supply/`** because the Linux kernel has no general
+HID-Power-Device → power_supply driver. They're visible to UPower via
+direct libusb HID parsing, exposed on D-Bus as
+`org.freedesktop.UPower.Device { Type = UPS }`.
+
+A separate UPS listener that subscribes to UPower's `DeviceAdded` /
+`DeviceRemoved` + `PropertiesChanged` (Percentage, State,
+TimeToEmpty) avoids both the laptop-battery sysfs path (already fast)
+and the original "drop UPower for AC-plug latency" decision (UPSes
+are slow-changing — 30 s poll lag is acceptable for "running on
+battery, 48 min remaining"). Reuses the band logic from the main
+battery listener: `empty / caution / low / good / full` thresholds
+fire OSDs, state transitions always do.
+
+Cost: ~150 LOC + zbus dep, scoped only to this crate. Doesn't disturb
+the laptop-battery sysfs+udev path.
+
+### `awob-listener-kbd-state` — Caps Lock / Num Lock / Scroll Lock
+
+Toggle indicators that don't currently fire any OSD on awob. Two
+viable upstreams:
+
+* **`/sys/class/leds/input*::capslock` / `::numlock` / `::scrolllock`**
+  — same sysfs-LED model the keyboard-backlight listener already uses.
+  inotify covers most paths; udev fills the gap for firmware-driven
+  state changes.
+* **libinput / evdev** — wake on the keypress itself, then read the
+  current modifier mask. Lower latency; needs `input` group access.
+
+Cost: ~120 LOC. Probably the most-asked-for of the catalogue —
+SwayOSD and KDE both surface this prominently.
+
+### `awob-listener-media` — playback state + track changes via MPRIS
+
+Subscribe to all `org.mpris.MediaPlayer2.*` bus names; emit OSDs on
+play/pause toggles, track changes (artist + title), and seek
+operations. MPRIS is the freedesktop standard every Linux media
+player implements (Spotify, Mpris, mpv, VLC, browsers via
+extensions).
+
+Cost: ~200 LOC + zbus. Distinct OSD style needed — track-change OSDs
+want `app=<player>`, `value=<progress>`, `event=track-change` with
+album-art icon resolution; not a fit for the bar-with-percentage
+default theme without theme tweaks.
+
+### `awob-listener-network` — Wi-Fi / Bluetooth / airplane / VPN
+
+NetworkManager exposes everything via D-Bus
+(`org.freedesktop.NetworkManager`): radio toggles, connection state,
+VPN connection. rfkill provides the kernel-level airplane-mode signal
+(`/dev/rfkill` + udev `rfkill` subsystem) for pre-NetworkManager
+firmware-handled toggles.
+
+Cost: ~250 LOC + zbus. Broad surface area — could ship in stages
+(radio toggles first, VPN second).
+
+### `awob-listener-power-profile` — performance / balanced / power-save
+
+`power-profiles-daemon` (the GNOME / KDE-blessed replacement for
+`tlp` interactive bits) exposes the active profile via D-Bus
+(`net.hadess.PowerProfiles` / `org.freedesktop.UPower.PowerProfiles`).
+A user pressing a Fn-key bound to switch profile gets an OSD with the
+new profile name + an icon. Three states + a transition icon, very
+small surface area.
+
+Cost: ~80 LOC + zbus. Trivial once we've got zbus pulled in for one
+of the above.
+
+### `awob-listener-display` — output connect / disconnect / rotation
+
+When an external monitor is plugged in or rotated (for laptop tablet
+modes), surface an OSD with the connector name and resolution.
+`wlr-output-management-unstable-v1` gives this on wlroots
+compositors; on KDE / mutter the equivalent is the desktop's own
+event stream. The keyboard-backlight listener already pulls in Wayland
+client code via `wayland_outputs.rs` for `wl_output.description` —
+some of that logic could be shared.
+
+Cost: ~150 LOC. Niche but visually satisfying.
+
+### `awob-listener-touchpad` — disable / re-enable on Fn-key
+
+Many laptops have a Fn key that toggles the touchpad. libinput
+exposes per-device send-events state via udev. Watch for
+`add` / `remove` of `input` devices matching the touchpad pattern,
+plus property changes on the existing one.
+
+Cost: ~100 LOC. Low priority — touchpad toggles are rare enough that
+most users wouldn't notice the OSD.
+
+## Considered and rejected (or scoped out)
+
+These came up in the canvass but don't fit awob's model well:
+
+* **Screenshot / screen-recording confirmation OSDs** — better handled
+  by the screenshot tool itself (grim, slurp, hyprshot) producing its
+  own toast or sound. awob would need to be invoked explicitly from
+  every screenshot script — no obvious universal hook.
+* **Do-Not-Disturb toggle** — desktop-specific (mako has its own
+  mode flag, swaync has another, KDE has another). No standard signal
+  to subscribe to. The notification daemon is the right place to
+  surface this.
+* **Clipboard content preview** — the OSD model (transient bar +
+  icon) is wrong for showing arbitrary clipboard contents (could be a
+  long string, a file path, an image). Better fit for a notification
+  daemon's transient mode.
+* **FPS / GPU-temp / RAM heads-up overlay** — fundamentally different:
+  a *persistent* screen-corner overlay, not a transient bar. awob's
+  layer-shell surface is built to fade in, draw briefly, fade out;
+  remodelling it for a HUD would be a different program. MangoHud /
+  RivaTuner-on-Linux are the right tools.
+* **Sticky Keys / accessibility-key indicators** — desktop-specific,
+  no standard signal. Live in each compositor's own a11y stack.
