@@ -22,6 +22,7 @@ const sidebars: SidebarsConfig = {
       ],
     },
     "usage",
+    "listeners",
     "themes",
     "protocol",
   ],
