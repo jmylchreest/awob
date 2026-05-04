@@ -31,8 +31,8 @@ Three things wob doesn't do that some users want:
   `value`, `source`, `style`, `icon`, etc. — easier to integrate
   with than parsing wob's positional `<value> [<style>]` lines.
   See [Protocol](/protocol).
-* **An event-source listener ecosystem.** PipeWire, UPower, sysfs
-  backlight, keyboard backlight — auto-discovered and supervised.
+* **An event-source listener ecosystem.** PipeWire, sysfs battery,
+  sysfs backlight, keyboard backlight — auto-discovered and supervised.
   Plug in your own listener via the same socket protocol.
 
 ## What awob doesn't try to be

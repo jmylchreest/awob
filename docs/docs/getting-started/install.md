@@ -29,8 +29,8 @@ You'll need:
 * `pkg-config`
 * fontconfig + freetype dev headers
 * PipeWire dev headers (only if you want the PipeWire listener)
-* D-Bus dev headers (only if you want the UPower listener)
-* libudev (only if you want the backlight listener)
+* libudev (only if you want the battery or backlight listeners — both
+  use udev for hot-plug / state-change events)
 
 On Debian / Ubuntu:
 

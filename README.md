@@ -6,7 +6,7 @@ daemon. A spiritual successor and drop-in replacement for the excellent
 its name and FIFO format to. If wob covers what you need, **use wob** —
 it's tiny, fast, and battle-tested. awob exists for users who want a
 richer theming model, typed IPC, and a small ecosystem of event-source
-listeners (PipeWire, UPower, backlight, keyboard-backlight) on top of
+listeners (PipeWire, battery, backlight, keyboard-backlight) on top of
 the same simple FIFO interface.
 
 <!--

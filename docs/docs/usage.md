@@ -58,7 +58,7 @@ compositor.
 * **`awob` (CLI)** is a one-shot client for sending events from
   scripts or keybinds.
 * **`awob-listener-*`** processes are long-running event sources. They
-  subscribe to their upstream (PipeWire, UPower, sysfs, FIFO, …) and
+  subscribe to their upstream (PipeWire, sysfs, FIFO, …) and
   forward typed sends to the daemon. Spawned and restarted by the
   daemon's supervisor.
 
@@ -191,9 +191,10 @@ interacts with an already-visible OSD.
   cycle.
 
 Listener defaults wired in: PipeWire, backlight, keyboard-backlight,
-and the wob FIFO shim send `preempt=true`. UPower keeps the default
-`false`. The CLI's default is `false`; pass `--preempt` to mark a
-script-driven send interactive.
+and the wob FIFO shim send `preempt=true`. The battery listener keeps
+the default `false` — battery state is ambient information, not a
+direct response to user input. The CLI's default is `false`; pass
+`--preempt` to mark a script-driven send interactive.
 
 ## Migrating from wob
 
@@ -236,7 +237,7 @@ or `<value> <style>` lines to a FIFO.
    awob-daemon
    ```
 
-   Auto-discovery is on, so the PipeWire / UPower / backlight
+   Auto-discovery is on, so the PipeWire / battery / backlight
    listeners spawn too if their binaries are installed. Disable any
    you don't want with `[supervisor] disable = […]`.
 

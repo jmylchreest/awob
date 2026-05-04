@@ -425,7 +425,6 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         &state_filter,
         &alert_bands,
         &mut last,
-        true,
     );
 
     loop {
@@ -494,7 +493,6 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 &state_filter,
                 &alert_bands,
                 &mut last,
-                false,
             );
             last_rescan = now;
         }
@@ -592,9 +590,12 @@ fn parse_alert_bands(arg: &str) -> HashSet<&'static str> {
 /// `caution` are in `alert_bands` — only band entries we explicitly
 /// asked about and state transitions surface as OSDs.
 ///
-/// `force=true` fires unconditionally (used at startup so the initial
-/// state hits the screen even if nothing's changed since the last
-/// daemon boot).
+/// On the first call (`*last == None`) the function records the
+/// current state and band as a baseline *without* firing. That keeps
+/// the listener silent on startup / supervisor respawn — matching
+/// pipewire / backlight / keyboard-backlight, which only fire on real
+/// changes. Without this the user would see a "discharging at 73 %"
+/// OSD every time the daemon was restarted, which is just noise.
 fn refresh_and_send(
     cache: &std::collections::HashMap<String, BatteryReading>,
     socket: &Option<PathBuf>,
@@ -602,7 +603,6 @@ fn refresh_and_send(
     state_filter: &HashSet<BatteryState>,
     alert_bands: &HashSet<&'static str>,
     last: &mut Option<(BatteryState, &'static str)>,
-    force: bool,
 ) {
     let readings: Vec<BatteryReading> = cache.values().cloned().collect();
     let Some((pct, state)) = aggregate(&readings) else {
@@ -613,16 +613,17 @@ fn refresh_and_send(
     }
     let pct_int = pct.round() as i32;
     let band = band_for(pct_int);
-    let changed = match *last {
+    let fire_now = match *last {
         Some((prev_state, prev_band_name)) => {
             prev_state != state || (band.name != prev_band_name && alert_bands.contains(band.name))
         }
-        None => true,
+        // First observation: silently record the baseline.
+        None => false,
     };
-    if !changed && !force {
+    *last = Some((state, band.name));
+    if !fire_now {
         return;
     }
-    *last = Some((state, band.name));
     if let Err(e) = fire(socket, source, pct, state) {
         tracing::info!("send: {e}");
     }

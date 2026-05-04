@@ -28,8 +28,8 @@ systemctl --user enable --now awob.service
 ```
 
 That's it. No keybinds to write. The PipeWire listener drives volume,
-the UPower listener drives battery, the backlight listener drives
-brightness.
+the battery listener drives battery state, the backlight listener
+drives brightness.
 
 If you're using `uwsm` (Universal Wayland Session Manager), the
 unit's `WantedBy=graphical-session.target` plays nice with it
@@ -90,4 +90,4 @@ multi-output mode in the daemon — not implemented yet, see
 |---|---|
 | OSD never appears | Daemon not running. `systemctl --user status awob.service`. |
 | OSD shows but Hyprland flickers | Conflict with another layer-shell tool. Most commonly an old wob daemon — `pkill wob`. |
-| Listener errors in journal | The relevant system service (PipeWire, UPower, etc.) isn't running, or your user lacks access to the underlying device (sysfs backlight on some hardware). |
+| Listener errors in journal | The relevant upstream isn't running (PipeWire), or your user lacks access to the underlying device (sysfs backlight / `/sys/class/power_supply/*` on some hardware). |

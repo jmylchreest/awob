@@ -194,8 +194,8 @@ can warn on duplicate processes.
   listener types" semantically.
 * **`source`** is per-physical-source. One sink in PipeWire = one
   source. Use a stable identifier (PipeWire object id, sysfs device
-  name, UPower path); avoid PIDs — they change on respawn and break
-  history continuity.
+  name like `BAT0`, D-Bus object path); avoid PIDs — they change on
+  respawn and break history continuity.
 
 The daemon flags as duplicate when *two distinct sources share one
 `listener_id`*. That signals two processes of the same listener

@@ -17,7 +17,7 @@ say "A: ambient battery (preempt=false), then volume preempt mid-cycle"
 note "Battery shows. Volume key arrives → instantly hot-swaps."
 note "After volume settles, battery does NOT come back — it was on"
 note "screen, not queued."
-"$AWOB" send --source upower-battery --icon battery-good --app "Battery: charging" battery 0.55 1.0
+"$AWOB" send --source battery --icon battery-good --app "Battery: charging" battery 0.55 1.0
 sleep 0.6
 "$AWOB" send --preempt --source pw-speaker --icon audio-volume-high --app "Speakers" volume 0.7 1.0
 sleep 4.0
@@ -27,7 +27,7 @@ note "Volume shows. Battery arrives non-preempt during it → QUEUED."
 note "Volume cycle ends → battery fades in fresh."
 "$AWOB" send --preempt --source pw-speaker --icon audio-volume-high --app "Speakers" volume 0.5 1.0
 sleep 0.6
-"$AWOB" send --source upower-battery --icon battery-good --app "Battery: charging" battery 0.40 1.0
+"$AWOB" send --source battery --icon battery-good --app "Battery: charging" battery 0.40 1.0
 sleep 6.0
 
 say "C: same (source, event) continuity (rapid same volume sends)"
@@ -44,7 +44,7 @@ note "Volume preempt active. Battery queues. Weather queues (replaces"
 note "battery). Volume settles → only weather drains; battery dropped."
 "$AWOB" send --preempt --source pw-speaker --icon audio-volume-high --app "Speakers" volume 0.6 1.0
 sleep 0.5
-"$AWOB" send --source upower-battery --icon battery-good --app "Battery (DROP)" battery 0.30 1.0
+"$AWOB" send --source battery --icon battery-good --app "Battery (DROP)" battery 0.30 1.0
 sleep 0.3
 "$AWOB" send --source weather --icon weather-clear --app "Weather (SHOW)" temperature 0.75 1.0
 sleep 6.0

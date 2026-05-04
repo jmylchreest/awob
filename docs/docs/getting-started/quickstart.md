@@ -85,7 +85,7 @@ so the choice survives a daemon restart.
 ```sh
 awob query
 # pipewire   pw-speaker   event=volume     value=0.7  max=1.0  age=12.3s
-# upower     dev          event=battery    value=0.55 max=1.0  age=300.1s
+# battery    BAT0         event=battery    value=0.55 max=1.0  age=300.1s
 ```
 
 The history is keyed by `(source, event)` — see

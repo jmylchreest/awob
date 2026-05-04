@@ -62,7 +62,7 @@ pub struct SupervisorConfig {
     #[serde(default = "default_auto")]
     pub auto: bool,
     /// Names of auto-discovered listeners to skip. Match the `name`
-    /// strings in `KNOWN_LISTENERS` (e.g. `"pipewire"`, `"upower"`).
+    /// strings in `KNOWN_LISTENERS` (e.g. `"pipewire"`, `"battery"`).
     /// Has no effect on explicit `[[listeners]]` entries.
     #[serde(default)]
     pub disable: Vec<String>,

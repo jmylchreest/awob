@@ -249,8 +249,8 @@ mod tests {
     #[test]
     fn re_record_same_source_event_no_duplicate() {
         let mut h = History::new();
-        h.record("aaaa", Some("upower"), "battery", 50.0, 100.0);
-        let r = h.record("aaaa", Some("upower"), "battery", 49.0, 100.0);
+        h.record("aaaa", Some("battery"), "battery", 50.0, 100.0);
+        let r = h.record("aaaa", Some("battery"), "battery", 49.0, 100.0);
         assert!(r.duplicate_listener.is_none());
     }
 

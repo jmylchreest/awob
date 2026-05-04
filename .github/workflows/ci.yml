@@ -2,8 +2,8 @@
 #
 # Linux-only by design — awob is a Wayland-only project. The runner
 # needs system libs that the workspace links against (PipeWire,
-# UPower / D-Bus, fontconfig). Each job installs them up front;
-# cache restores Cargo registry + target dir between runs.
+# libudev, fontconfig). Each job installs them up front; cache
+# restores Cargo registry + target dir between runs.
 
 name: CI
 
