@@ -21,6 +21,13 @@ tag-name = "v{{version}}"
 # log scan picks them out.
 pre-release-commit-message = "chore: release v{{version}}"
 
+# Tag annotation — same form as the commit subject. cargo-release's
+# default ("chore: Release {{crate_name}} version {{version}}") picks
+# the first workspace crate alphabetically (awob-protocol on this
+# repo) which both reads weirdly and capitalises "Release" — keep it
+# conventional and workspace-aware.
+tag-message = "chore: release v{{version}}"
+
 # Sign commit + tag if the user has signing configured. Falls back
 # silently when no key is set up.
 sign-commit = true
