@@ -35,16 +35,29 @@ pub struct ShadowSpec {
     pub colour: Colour,
 }
 
+/// Maximum accepted blur radius, in pixels. The mask buffer scales as
+/// `(w + 4·blur)²` bytes, so unbounded values from theme files are an
+/// OOM vector. 256 px is well past the visible Gaussian falloff for
+/// any sensible OSD.
+pub const MAX_BLUR_RADIUS: f32 = 256.0;
+
 /// Parse `"<offset-x> <offset-y> <blur-radius> <colour>"`.
 ///
 /// Whitespace inside the colour token (e.g. `rgba(0, 0, 0, 0.4)`) is
 /// tolerated by stripping spaces from everything after the first three
 /// numeric tokens before handing it to [`Colour::parse`].
+///
+/// `blur_radius` is clamped to `[0, MAX_BLUR_RADIUS]` to bound mask
+/// allocation. NaN is rejected.
 pub fn parse(s: &str) -> Option<ShadowSpec> {
     let mut tokens = s.split_whitespace();
     let offset_x: f32 = tokens.next()?.parse().ok()?;
     let offset_y: f32 = tokens.next()?.parse().ok()?;
-    let blur_radius: f32 = tokens.next()?.parse().ok()?;
+    let raw_blur: f32 = tokens.next()?.parse().ok()?;
+    if raw_blur.is_nan() {
+        return None;
+    }
+    let blur_radius = raw_blur.clamp(0.0, MAX_BLUR_RADIUS);
     let colour_str: String = tokens.collect::<String>();
     let colour = Colour::parse(&colour_str).ok()?;
     Some(ShadowSpec {
@@ -74,6 +87,11 @@ impl ShadowCache {
     }
 
     pub fn get_or_compute(&mut self, w: u32, h: u32, radius: u32, blur: u32) -> (u32, u32, &[u8]) {
+        // Belt-and-braces clamp: parse() already caps blur, but ShadowSpec
+        // has public fields and a misbehaving caller could feed us a huge
+        // value. Mask buffer is (w + 4·blur)² bytes, so this bounds the
+        // worst-case allocation even if the parser is bypassed.
+        let blur = blur.min(MAX_BLUR_RADIUS as u32);
         let key = (w, h, radius, blur);
         let entry = self
             .masks
@@ -240,6 +258,23 @@ mod tests {
         assert_eq!(mh1, mh2);
         assert_eq!(mw1, 50 + 2 * shadow_padding(16));
         assert_eq!(mh1, 30 + 2 * shadow_padding(16));
+    }
+
+    #[test]
+    fn parse_clamps_huge_blur() {
+        let s = parse("0 0 1000000 rgba(0,0,0,0.5)").unwrap();
+        assert_eq!(s.blur_radius, MAX_BLUR_RADIUS);
+    }
+
+    #[test]
+    fn parse_rejects_nan_blur() {
+        assert!(parse("0 0 NaN rgba(0,0,0,0.5)").is_none());
+    }
+
+    #[test]
+    fn parse_rejects_negative_blur_via_clamp() {
+        let s = parse("0 0 -50 rgba(0,0,0,0.5)").unwrap();
+        assert_eq!(s.blur_radius, 0.0);
     }
 
     #[test]

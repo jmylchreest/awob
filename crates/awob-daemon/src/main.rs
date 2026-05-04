@@ -9,7 +9,7 @@ mod wayland;
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 use std::time::Instant;
 
@@ -399,16 +399,71 @@ fn build_effective_listeners(cfg: &config::AwobConfig) -> Vec<config::ListenerCo
 /// Uses `toml_edit` to preserve user comments, key order, and any
 /// formatting they care about — only the `theme` value is touched.
 /// Creates the file (and parent directory) if neither exists.
+///
+/// The read-modify-write is serialised via an exclusive `flock` on a
+/// sibling lockfile (`awob.toml.lock`), so two daemon instances or a
+/// daemon racing the user's editor can't lose each other's changes.
+/// The write itself goes via temp file + rename so a crash mid-write
+/// can't truncate the existing config.
 fn persist_theme_to_config(path: &Path, theme: &str) -> std::io::Result<()> {
+    use rustix::fs::{FlockOperation, flock};
+
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    // Lockfile lives next to the target. We hold an exclusive lock for
+    // the whole read-modify-write so concurrent persists serialize.
+    let lock_path = path.with_extension(
+        path.extension()
+            .map(|e| {
+                let mut s = e.to_os_string();
+                s.push(".lock");
+                s
+            })
+            .unwrap_or_else(|| std::ffi::OsString::from("lock")),
+    );
+    let lock_file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&lock_path)?;
+    flock(&lock_file, FlockOperation::LockExclusive)
+        .map_err(|e| std::io::Error::other(format!("flock {}: {e}", lock_path.display())))?;
+
     let existing = std::fs::read_to_string(path).unwrap_or_default();
     let mut doc: toml_edit::DocumentMut = existing.parse().map_err(|e: toml_edit::TomlError| {
         std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())
     })?;
     doc["theme"] = toml_edit::value(theme);
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+    let serialized = doc.to_string();
+
+    // Temp file in the same directory so rename() is atomic on the same
+    // filesystem. PID + nanos in the suffix avoids collisions with
+    // concurrent writers that somehow slipped past the flock (older
+    // tooling that doesn't take it).
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| std::io::Error::other("config path has no filename"))?;
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or(0);
+    let tmp_name = format!(
+        "{}.tmp.{}.{}",
+        file_name.to_string_lossy(),
+        std::process::id(),
+        nanos
+    );
+    let tmp_path = parent.join(tmp_name);
+
+    std::fs::write(&tmp_path, serialized)?;
+    if let Err(e) = std::fs::rename(&tmp_path, path) {
+        let _ = std::fs::remove_file(&tmp_path);
+        return Err(e);
     }
-    std::fs::write(path, doc.to_string())
+    Ok(())
 }
 
 fn history_entry(source: &str, e: &state::Entry) -> HistoryEntry {
@@ -440,6 +495,24 @@ impl WithProtocolCheck for Response {
 
 fn default_themes_dir() -> Option<PathBuf> {
     awob_core::paths::awob_themes_dir()
+}
+
+/// Acquire a mutex, recovering from a poisoned lock instead of
+/// panicking. A panic in any IPC handler would otherwise poison the
+/// shared-state mutex and brick every subsequent request — for a
+/// long-lived daemon, "log it and keep serving" is the right default.
+/// The recovered guard exposes whatever state the panicker left
+/// behind; callers must tolerate that.
+fn lock_or_recover<'a, T>(m: &'a Mutex<T>, label: &str) -> MutexGuard<'a, T> {
+    match m.lock() {
+        Ok(g) => g,
+        Err(poisoned) => {
+            tracing::warn!(
+                "{label}: mutex poisoned by a previous panic — continuing with recovered state"
+            );
+            poisoned.into_inner()
+        }
+    }
 }
 
 fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
@@ -561,7 +634,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         force_palette,
     }));
     {
-        let mut s = shared.lock().unwrap();
+        let mut s = lock_or_recover(&shared, "shared(init)");
         s.rewatch();
         tracing::info!(
             "watching: {} paths for hot reload",
@@ -585,7 +658,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                         break;
                     }
                 }
-                let mut s = shared.lock().unwrap();
+                let mut s = lock_or_recover(&shared, "shared(reload)");
                 let name = s.theme.name.clone();
                 let root = s.themes_root.clone();
                 let force_palette = s.force_palette.clone();
@@ -632,7 +705,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         thread::spawn(move || {
             loop {
                 std::thread::sleep(std::time::Duration::from_millis(250));
-                sup.lock().unwrap().tick(Some(&socket_for_sup));
+                lock_or_recover(&sup, "supervisor(tick)").tick(Some(&socket_for_sup));
             }
         });
     }
@@ -648,7 +721,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             let _ = signals.thread_block();
             if let Ok(sig) = signals.wait() {
                 tracing::info!("daemon: caught {sig:?}, shutting down");
-                sup.lock().unwrap().shutdown();
+                lock_or_recover(&sup, "supervisor(shutdown)").shutdown();
                 std::process::exit(0);
             }
         });
@@ -664,7 +737,9 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         };
         let shared = Arc::clone(&shared);
         thread::spawn(move || {
-            let _ = ipc::serve_connection(stream, move |req| shared.lock().unwrap().handle(req));
+            let _ = ipc::serve_connection(stream, move |req| {
+                lock_or_recover(&shared, "shared(handle)").handle(req)
+            });
         });
     }
 
@@ -690,5 +765,86 @@ fn main() -> ExitCode {
             tracing::error!(error = %e, "awob-daemon failed to start");
             ExitCode::from(1)
         }
+    }
+}
+
+#[cfg(test)]
+mod persist_tests {
+    use super::*;
+    use std::sync::Barrier;
+
+    #[test]
+    fn persist_creates_file_and_writes_theme() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("awob.toml");
+        persist_theme_to_config(&path, "ocean").unwrap();
+        let body = std::fs::read_to_string(&path).unwrap();
+        assert!(body.contains("theme = \"ocean\""), "got: {body}");
+    }
+
+    #[test]
+    fn persist_preserves_unrelated_keys_and_comments() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("awob.toml");
+        std::fs::write(
+            &path,
+            "# user comment\n\
+             theme = \"old\"\n\
+             socket = \"/tmp/x.sock\"\n",
+        )
+        .unwrap();
+        persist_theme_to_config(&path, "new").unwrap();
+        let body = std::fs::read_to_string(&path).unwrap();
+        assert!(body.contains("# user comment"), "comment lost: {body}");
+        assert!(
+            body.contains("socket = \"/tmp/x.sock\""),
+            "key lost: {body}"
+        );
+        assert!(
+            body.contains("theme = \"new\""),
+            "theme not updated: {body}"
+        );
+    }
+
+    #[test]
+    fn concurrent_persists_serialize_via_flock() {
+        // Two threads racing to persist different themes. Without the
+        // flock + atomic rename, we can hit a torn write or a lost
+        // update. With it, the file ends up containing exactly one of
+        // the two values intact.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("awob.toml");
+        std::fs::write(&path, "theme = \"start\"\n").unwrap();
+
+        let path1 = path.clone();
+        let path2 = path.clone();
+        let barrier = Arc::new(Barrier::new(2));
+        let b1 = Arc::clone(&barrier);
+        let b2 = Arc::clone(&barrier);
+
+        let h1 = thread::spawn(move || {
+            b1.wait();
+            for _ in 0..50 {
+                persist_theme_to_config(&path1, "alpha").unwrap();
+            }
+        });
+        let h2 = thread::spawn(move || {
+            b2.wait();
+            for _ in 0..50 {
+                persist_theme_to_config(&path2, "beta").unwrap();
+            }
+        });
+        h1.join().unwrap();
+        h2.join().unwrap();
+
+        let body = std::fs::read_to_string(&path).unwrap();
+        // Must parse cleanly (no torn writes) and contain one of the
+        // two values.
+        let doc: toml_edit::DocumentMut = body.parse().expect("config corrupt after race");
+        let theme = doc["theme"].as_str().unwrap();
+        assert!(
+            theme == "alpha" || theme == "beta",
+            "unexpected theme {theme}"
+        );
     }
 }

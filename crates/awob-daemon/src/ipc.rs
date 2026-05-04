@@ -6,12 +6,18 @@
 //! client sends one or more requests, the daemon replies one-for-one, and
 //! either side may hang up at any time.
 
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 
 use awob_protocol::{DEFAULT_SOCKET_NAME, Request, Response};
+
+/// Maximum size of a single JSON-line request, in bytes. Real requests
+/// are well under 1 KB; 64 KB leaves headroom for unusually long
+/// `theme_dir` paths or future fields without letting a misbehaving
+/// local client exhaust the daemon's RAM.
+const MAX_LINE_BYTES: u64 = 64 * 1024;
 
 #[derive(Debug, thiserror::Error)]
 pub enum IpcError {
@@ -115,8 +121,26 @@ where
     let mut line = String::new();
     loop {
         line.clear();
-        let n = reader.read_line(&mut line)?;
+        // Bound each request to MAX_LINE_BYTES so a misbehaving client
+        // can't pin daemon RAM by streaming an unterminated giant line.
+        // We allow one extra byte so we can distinguish "exactly at the
+        // cap" (legitimate) from "ran past the cap".
+        let mut limited = reader.by_ref().take(MAX_LINE_BYTES + 1);
+        let n = limited.read_line(&mut line)?;
         if n == 0 {
+            return Ok(());
+        }
+        if (n as u64) > MAX_LINE_BYTES {
+            // Oversize line: send a single error and close. We don't try
+            // to resync because we'd have to drain an attacker-controlled
+            // amount of data to find the next newline.
+            let response = Response::Error {
+                message: format!("request exceeds {MAX_LINE_BYTES}-byte limit"),
+            };
+            let mut out = serde_json::to_vec(&response)?;
+            out.push(b'\n');
+            let _ = writer.write_all(&out);
+            let _ = writer.flush();
             return Ok(());
         }
         let trimmed = line.trim_end();
@@ -179,5 +203,32 @@ mod tests {
         r.read_line(&mut line).unwrap();
         assert!(line.contains("\"hello\""));
         assert!(line.contains("\"daemon_version\":\"test\""));
+    }
+
+    #[test]
+    fn serve_rejects_oversize_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("over.sock");
+        let server = Server::bind(p.clone()).unwrap();
+        let listener = server.try_clone_listener().unwrap();
+        thread::spawn(move || {
+            for incoming in listener.incoming() {
+                let s = incoming.unwrap();
+                serve_connection(s, |_req| Response::Ok).ok();
+            }
+        });
+        let mut client = UnixStream::connect(&p).unwrap();
+        // Send a payload that exceeds MAX_LINE_BYTES with no newline yet.
+        let big = vec![b'x'; (MAX_LINE_BYTES as usize) + 100];
+        client.write_all(&big).unwrap();
+        client.write_all(b"\n").unwrap();
+        client.flush().unwrap();
+        let mut r = BufReader::new(client);
+        let mut line = String::new();
+        r.read_line(&mut line).unwrap();
+        assert!(
+            line.contains("exceeds"),
+            "expected size-limit error, got: {line}"
+        );
     }
 }
