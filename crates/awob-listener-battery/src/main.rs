@@ -189,6 +189,43 @@ fn read_f64(p: &Path) -> Option<f64> {
     read_string(p)?.parse::<f64>().ok()
 }
 
+/// Re-scan cadence when no devices are present yet. Runs forever in the
+/// background of an otherwise-idle desktop where no battery exists,
+/// catching hot-plug additions cheaply (one [`std::fs::read_dir`] per
+/// minute). 60 s rather than something faster because batteries
+/// don't appear/disappear meaningfully often.
+const NO_DEVICE_RESCAN: Duration = Duration::from_secs(60);
+
+/// Block until at least one battery is discoverable. On a desktop with
+/// no battery this loops forever at [`NO_DEVICE_RESCAN`] cadence; on a
+/// laptop the first scan succeeds immediately.
+///
+/// Logs the "no batteries" state once at INFO so it's visible in the
+/// journal without spamming on every retry. Subsequent quiet retries
+/// stay at DEBUG.
+fn wait_for_batteries() -> Vec<PathBuf> {
+    let bs = discover_batteries();
+    if !bs.is_empty() {
+        return bs;
+    }
+    tracing::info!(
+        "no batteries under {SYSFS_ROOT} (type=Battery); will rescan every {}s for hot-plug",
+        NO_DEVICE_RESCAN.as_secs()
+    );
+    loop {
+        std::thread::sleep(NO_DEVICE_RESCAN);
+        let bs = discover_batteries();
+        if !bs.is_empty() {
+            tracing::info!("battery appeared; resuming");
+            return bs;
+        }
+        tracing::debug!(
+            "still no batteries; rescanning in {}s",
+            NO_DEVICE_RESCAN.as_secs()
+        );
+    }
+}
+
 /// Return every `power_supply` device of `type=Battery` on this system.
 fn discover_batteries() -> Vec<PathBuf> {
     let Ok(entries) = std::fs::read_dir(SYSFS_ROOT) else {
@@ -376,11 +413,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         cli.alert_bands
     );
 
-    let batteries = discover_batteries();
-    if batteries.is_empty() {
-        tracing::info!("no batteries under {SYSFS_ROOT} (type=Battery); nothing to watch");
-        return Ok(());
-    }
+    let batteries = wait_for_batteries();
     for b in &batteries {
         tracing::info!("battery: {}", b.display());
     }

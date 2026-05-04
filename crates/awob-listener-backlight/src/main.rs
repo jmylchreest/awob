@@ -76,11 +76,51 @@ fn read_u32(p: &Path) -> std::io::Result<u32> {
         .map_err(|e| std::io::Error::other(format!("parse {}: {e}", p.display())))
 }
 
-fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
-    let dir = match cli.device {
-        Some(name) => Path::new("/sys/class/backlight").join(name),
-        None => discover_device().ok_or("no backlight device found under /sys/class/backlight")?,
+/// Re-scan cadence when no backlight is present yet. Headless servers
+/// and desktops with no DPMS-aware GPU never gain a backlight; the
+/// 60 s rescan keeps the listener cheap there while still catching
+/// the rare case where a driver loads late (e.g. hybrid graphics).
+const NO_DEVICE_RESCAN: Duration = Duration::from_secs(60);
+
+/// Block until a backlight device appears (either at the explicit
+/// `--device` name or via auto-discovery). Logs once at INFO and quiet
+/// retries at DEBUG so a no-display headless box doesn't spam the
+/// journal.
+fn wait_for_device(explicit: Option<&str>) -> PathBuf {
+    let resolve = || match explicit {
+        Some(name) => {
+            let p = Path::new("/sys/class/backlight").join(name);
+            if p.join("brightness").exists() {
+                Some(p)
+            } else {
+                None
+            }
+        }
+        None => discover_device(),
     };
+    if let Some(p) = resolve() {
+        return p;
+    }
+    tracing::info!(
+        "no backlight device found under /sys/class/backlight; \
+         will rescan every {}s for hot-plug",
+        NO_DEVICE_RESCAN.as_secs()
+    );
+    loop {
+        std::thread::sleep(NO_DEVICE_RESCAN);
+        if let Some(p) = resolve() {
+            tracing::info!("backlight appeared at {}; resuming", p.display());
+            return p;
+        }
+        tracing::debug!(
+            "still no backlight; rescanning in {}s",
+            NO_DEVICE_RESCAN.as_secs()
+        );
+    }
+}
+
+fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
+    let dir = wait_for_device(cli.device.as_deref());
     let brightness_path = dir.join("brightness");
     let max_path = dir.join("max_brightness");
     if !brightness_path.exists() {

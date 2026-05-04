@@ -130,12 +130,50 @@ fn read_u32(p: &Path) -> std::io::Result<u32> {
         .map_err(|e| std::io::Error::other(format!("parse {}: {e}", p.display())))
 }
 
-fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
-    let dir = match cli.device {
-        Some(name) => Path::new("/sys/class/leds").join(name),
-        None => discover_device()
-            .ok_or("no keyboard backlight device found under /sys/class/leds (looked for *kbd*/*keyboard*)")?,
+/// Re-scan cadence when no LED is present yet. Sits in the background
+/// of a desktop without an internal keyboard backlight, catching a
+/// hot-plugged USB keyboard whose driver registers an LED. 60 s
+/// because keyboards don't appear/disappear often.
+const NO_DEVICE_RESCAN: Duration = Duration::from_secs(60);
+
+/// Block until a keyboard-backlight LED appears at the given device
+/// name (or via auto-discovery). Logs the "no device" state once at
+/// INFO and subsequent quiet retries at DEBUG.
+fn wait_for_device(explicit: Option<&str>) -> PathBuf {
+    let resolve = || match explicit {
+        Some(name) => {
+            let p = Path::new("/sys/class/leds").join(name);
+            if p.join("brightness").exists() {
+                Some(p)
+            } else {
+                None
+            }
+        }
+        None => discover_device(),
     };
+    if let Some(p) = resolve() {
+        return p;
+    }
+    tracing::info!(
+        "no keyboard backlight device found under /sys/class/leds (looked for *kbd*/*keyboard*); \
+         will rescan every {}s for hot-plug",
+        NO_DEVICE_RESCAN.as_secs()
+    );
+    loop {
+        std::thread::sleep(NO_DEVICE_RESCAN);
+        if let Some(p) = resolve() {
+            tracing::info!("keyboard backlight appeared at {}; resuming", p.display());
+            return p;
+        }
+        tracing::debug!(
+            "still no keyboard backlight; rescanning in {}s",
+            NO_DEVICE_RESCAN.as_secs()
+        );
+    }
+}
+
+fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
+    let dir = wait_for_device(cli.device.as_deref());
     let brightness_path = dir.join("brightness");
     let max_path = dir.join("max_brightness");
     if !brightness_path.exists() {
