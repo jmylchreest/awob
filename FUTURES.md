@@ -51,28 +51,12 @@ someone uses (1) and asks for more.
 
 ## Structured logging via `tracing`
 
-Today every binary uses `eprintln!` for diagnostics: daemon
-startup, send summaries, listener device-discovery, supervisor
-spawn/exit notices, errors. Listener stdout/stderr is inherited
-into the daemon process via `Stdio::inherit()`, so all output
-flows to the daemon's stderr — wherever that's been redirected
-(`/tmp/awob.log` for manual launches, `journalctl --user -u awob`
-when run via the systemd unit).
-
-Functional, but no log levels and no structured fields. Switching
-to `tracing` + `tracing-subscriber` would give:
-
-* `RUST_LOG=info`/`debug`/`warn` filtering at runtime
-* Per-listener `target=<name>` so journalctl filters cleanly:
-  `journalctl --user -u awob _COMM=awob-daemon SYSLOG_IDENTIFIER=battery`
-* Optional JSON output for ingestion by log shippers
-* Spans for "this whole Send took N ms" diagnostics
-
-Cost: ~30 LOC across awob-daemon + each listener (one
-`tracing-subscriber::fmt::init()` line in `main`, replace
-`eprintln!` with `tracing::info!`/`warn!`). Deferred because the
-current free-form output is debuggable via `journalctl` and
-nothing has actively bitten yet.
+Done. Daemon + every listener uses `tracing` with a shared
+`init_tracing` helper in `awob-client`. Default log directives
+(`info,smithay_client_toolkit=warn,...`) keep the journal focused on
+awob-meaningful events; users can override at runtime via
+`RUST_LOG`. Compact formatter, ANSI colours when stderr is a TTY,
+plain text otherwise. This entry retired.
 
 
 ## Friendly keyboard names from udev
