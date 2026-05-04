@@ -1,22 +1,30 @@
 //! awob keyboard-backlight listener.
 //!
-//! Watches a `/sys/class/leds/<kbd>/brightness` node and emits an OSD on
-//! every change. Auto-discovers a keyboard-backlight LED by pattern-
-//! matching against device names containing `kbd` or `keyboard`.
+//! Watches a `/sys/class/leds/<kbd>/brightness` node via three additive
+//! mechanisms — whichever wakes first wins. Auto-discovers the LED by
+//! pattern-matching `kbd` / `keyboard` device names.
 //!
-//! Why both polling and inotify? On hardware where userspace writes the
-//! sysfs file (most laptops driven via brightnessctl-style hotkeys) inotify
-//! fires immediately on the write, so we wake within microseconds.
+//! ## Why three?
 //!
-//! On hardware where the embedded controller / firmware handles the
-//! brightness key directly (Framework laptops with the chromeos EC,
-//! some Chromebooks, certain Apple keyboards) the kernel updates the
-//! cached sysfs value but the LED driver never calls `kernfs_notify()`
-//! — so no inotify event ever reaches us, and udev `change` events
-//! aren't fired either. The 250 ms polling backstop catches those
-//! cases at the cost of a four-byte sysfs read every quarter-second.
-//! Cheap insurance.
+//! No single mechanism is reliable across the whole laptop ecosystem:
+//!
+//! * **inotify** fires when *userspace* writes the sysfs `brightness`
+//!   file, e.g. brightnessctl from a Hyprland keybind. Microsecond
+//!   latency, doesn't fire on firmware-driven changes.
+//! * **udev** fires `change` events when the LED driver calls
+//!   `kobject_uevent()`. Some EC drivers do, some don't. Millisecond
+//!   latency where supported, silent otherwise.
+//! * **250 ms polling** catches everything else — drivers that update
+//!   the cached value without calling either notification primitive
+//!   (Framework laptops with the chromeos EC are the classic case).
+//!   Quarter-second worst-case latency, four-byte sysfs read per tick.
+//!
+//! All three feed the same `mpsc` wake channel; the main loop just
+//! reads-and-compares on every wake regardless of source. The polling
+//! interval acts as the `recv_timeout` so it's the natural fall-through
+//! when neither inotify nor udev fired.
 
+use std::os::fd::AsFd;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::mpsc;
@@ -24,6 +32,7 @@ use std::time::Duration;
 
 use awob_client::{Client, Send};
 use clap::Parser;
+use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
 use notify::{Event, EventKind, RecursiveMode, Watcher};
 
 /// Per-device listener_id pattern. Each keyboard is its own logical
@@ -140,31 +149,49 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     let initial = read_u32(&brightness_path).unwrap_or(0) as f64;
     let _ = send_to_daemon(&cli.socket, &source, &device_name, &label, initial, max);
 
+    // Source 1 — inotify on the sysfs file. Cheap, wakes the loop on
+    // userspace writes (brightnessctl etc).
     let (tx, rx) = mpsc::channel::<()>();
+    let inotify_tx = tx.clone();
     let mut watcher = notify::recommended_watcher(move |res: notify::Result<Event>| {
-        if let Ok(ev) = res {
-            if matches!(ev.kind, EventKind::Modify(_) | EventKind::Create(_)) {
-                let _ = tx.send(());
-            }
+        if let Ok(ev) = res
+            && matches!(ev.kind, EventKind::Modify(_) | EventKind::Create(_))
+        {
+            let _ = inotify_tx.send(());
         }
     })?;
     watcher.watch(&brightness_path, RecursiveMode::NonRecursive)?;
 
+    // Source 2 — udev `change` events on the leds subsystem, filtered
+    // to our device. Catches drivers that fire `kobject_uevent()`
+    // without writing the sysfs file from userspace. Spawned on a
+    // worker thread so the main loop just reads from the same channel.
+    let want_device = device_name.clone();
+    let udev_tx = tx.clone();
+    std::thread::Builder::new()
+        .name("udev-leds".into())
+        .spawn(move || {
+            if let Err(e) = run_udev(&want_device, udev_tx) {
+                tracing::debug!("udev monitor exited: {e}");
+            }
+        })?;
+
+    // Source 3 — 250 ms polling fall-through, expressed as the
+    // recv_timeout below. Backstop for drivers that update the cached
+    // sysfs value without firing either of the above (Framework
+    // laptops with the chromeos EC are the canonical case).
     let mut last = initial;
     let debounce = Duration::from_millis(40);
     let poll_interval = Duration::from_millis(250);
     loop {
         match rx.recv_timeout(poll_interval) {
             Ok(()) => {
-                // inotify fired — coalesce any rapid follow-up events
-                // before re-reading sysfs.
+                // Some source fired — coalesce a burst before re-reading.
                 std::thread::sleep(debounce);
                 while rx.try_recv().is_ok() {}
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {
-                // No inotify; fall through to the same read-and-compare
-                // path that the inotify branch uses. This is the
-                // backstop for firmware-driven LED updates.
+                // No wake; polling path.
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
         }
@@ -176,6 +203,33 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         let _ = send_to_daemon(&cli.socket, &source, &device_name, &label, current, max);
     }
     Ok(())
+}
+
+/// Subscribe to udev `change` events on the `leds` subsystem and
+/// forward each one matching our device into the wake channel.
+/// Returns when the channel is dropped (main loop exited) or on a
+/// fatal udev error.
+fn run_udev(want_device: &str, tx: mpsc::Sender<()>) -> Result<(), Box<dyn std::error::Error>> {
+    let monitor = udev::MonitorBuilder::new()?
+        .match_subsystem("leds")?
+        .listen()?;
+    let monitor_fd = monitor.as_fd();
+    loop {
+        let mut pfds = [PollFd::new(monitor_fd, PollFlags::POLLIN)];
+        match poll(&mut pfds, PollTimeout::NONE) {
+            Ok(_) => {}
+            Err(nix::errno::Errno::EINTR) => continue,
+            Err(e) => return Err(format!("poll: {e}").into()),
+        }
+        for ev in monitor.iter() {
+            // Only react to changes on our specific device. Some
+            // drivers fire on related leds (capslock, numlock) which
+            // share the subsystem but aren't the keyboard backlight.
+            if ev.sysname().to_string_lossy() == want_device && tx.send(()).is_err() {
+                return Ok(());
+            }
+        }
+    }
 }
 
 fn send_to_daemon(

@@ -201,9 +201,11 @@ version = "0.1.2"
 dependencies = [
  "awob-client",
  "clap",
+ "nix 0.29.0",
  "notify",
  "tracing",
  "tracing-subscriber",
+ "udev",
 ]
 
 [[package]]
