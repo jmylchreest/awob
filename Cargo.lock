@@ -219,6 +219,7 @@ dependencies = [
  "clap",
  "libspa",
  "pipewire",
+ "serde_json",
  "tracing",
  "tracing-subscriber",
 ]

@@ -92,6 +92,18 @@ struct Cli {
     /// repeatedly to allow multiple. Default: every app.
     #[arg(long = "per-app-binary")]
     per_app_binaries: Vec<String>,
+
+    /// Suppress events from non-default audio devices. With this flag
+    /// set, the listener subscribes to PipeWire's `default` Metadata
+    /// object and forwards events only from the node whose `node.name`
+    /// matches the current `default.audio.sink` (for sinks) or
+    /// `default.audio.source` (for sources). Per-app streams are
+    /// unaffected — `--per-app` events still fire regardless. Useful
+    /// on multi-sink boxes where a Bluetooth headset's volume change
+    /// shouldn't fire an OSD if the speakers are still the active
+    /// output.
+    #[arg(long)]
+    default_only: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -234,6 +246,13 @@ struct NodeIdentity {
     source: String,
     app: String,
     icon: Option<String>,
+    /// `node.name` from PipeWire — the symbolic device name
+    /// (e.g. `alsa_output.pci-0000_00_1f.3.analog-stereo`). Used by
+    /// `--default-only` filtering to compare against the current
+    /// `default.audio.sink` / `default.audio.source` metadata values.
+    /// `None` for app-stream nodes (apps don't participate in the
+    /// default-device mechanic).
+    node_name: Option<String>,
 }
 
 fn identity_for_device(props: &libspa::utils::dict::DictRef) -> Option<NodeIdentity> {
@@ -247,6 +266,7 @@ fn identity_for_device(props: &libspa::utils::dict::DictRef) -> Option<NodeIdent
         source: stable_node_hash(&node_name),
         app,
         icon: None,
+        node_name: Some(node_name),
     })
 }
 
@@ -299,6 +319,9 @@ fn identity_for_app(
         source: stable_node_hash(&key_for_hash),
         app,
         icon,
+        // App streams aren't subject to the --default-only filter — the
+        // default-device mechanic only applies to physical sinks/sources.
+        node_name: None,
     })
 }
 
@@ -431,17 +454,92 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     let bound_nodes: Rc<RefCell<HashMap<u32, NodeBinding>>> = Rc::new(RefCell::new(HashMap::new()));
     let last_state: Rc<RefCell<HashMap<u32, AudioState>>> = Rc::new(RefCell::new(HashMap::new()));
 
+    // The `default` Metadata object. Bound on first sight so we can
+    // observe `default.audio.sink` / `default.audio.source` updates
+    // when the user switches outputs. Held in a slot so the listener
+    // doesn't get dropped (the listener handle keeps the PipeWire
+    // subscription alive).
+    type MetadataBinding = (pw::metadata::Metadata, pw::metadata::MetadataListener);
+    let bound_metadata: Rc<RefCell<HashMap<u32, MetadataBinding>>> =
+        Rc::new(RefCell::new(HashMap::new()));
+
+    // Current default sink/source `node.name` — `None` until the
+    // metadata listener fires its first property events. With
+    // `--default-only`, events from non-default nodes are dropped.
+    #[derive(Default)]
+    struct Defaults {
+        sink: Option<String>,
+        source: Option<String>,
+    }
+    let defaults: Rc<RefCell<Defaults>> = Rc::new(RefCell::new(Defaults::default()));
+
     let no_speaker = cli.no_speaker;
     let no_mic = cli.no_mic;
+    let default_only = cli.default_only;
 
     let bound_for_global = Rc::clone(&bound_nodes);
+    let bound_metadata_for_global = Rc::clone(&bound_metadata);
     let last_state_for_global = Rc::clone(&last_state);
+    let defaults_for_global = Rc::clone(&defaults);
+    let defaults_for_param = Rc::clone(&defaults);
     let tx_for_global = tx.clone();
     let per_app = cli.per_app;
     let per_app_binaries: Vec<String> = cli.per_app_binaries.clone();
     let _registry_listener = registry
         .add_listener_local()
         .global(move |obj| {
+            // Bind the `default` Metadata object so we can observe
+            // `default.audio.sink` / `default.audio.source` for the
+            // --default-only filter. We bind unconditionally because
+            // the cost is small and the user might toggle the filter
+            // via a future config-reload path.
+            if obj.type_ == ObjectType::Metadata {
+                let props = match obj.props {
+                    Some(p) => p,
+                    None => return,
+                };
+                if props.get("metadata.name").unwrap_or("") != "default" {
+                    return;
+                }
+                let registry = match registry_weak.upgrade() {
+                    Some(r) => r,
+                    None => return,
+                };
+                let metadata: pw::metadata::Metadata = match registry.bind(obj) {
+                    Ok(m) => m,
+                    Err(e) => {
+                        tracing::info!("bind default metadata: {e}");
+                        return;
+                    }
+                };
+                let defaults_for_property = Rc::clone(&defaults_for_global);
+                let listener = metadata
+                    .add_listener_local()
+                    .property(move |_subject, key, _ty, value| {
+                        // Value is JSON like `{"name":"alsa_output...."}`
+                        // when the default is set; `None` when the
+                        // property is removed (e.g. last sink unplugged).
+                        let parsed = value.and_then(|v| {
+                            serde_json::from_str::<serde_json::Value>(v)
+                                .ok()
+                                .and_then(|json| {
+                                    json.get("name").and_then(|n| n.as_str()).map(String::from)
+                                })
+                        });
+                        let mut d = defaults_for_property.borrow_mut();
+                        match key {
+                            Some("default.audio.sink") => d.sink = parsed,
+                            Some("default.audio.source") => d.source = parsed,
+                            _ => {}
+                        }
+                        0
+                    })
+                    .register();
+                bound_metadata_for_global
+                    .borrow_mut()
+                    .insert(obj.id, (metadata, listener));
+                return;
+            }
             if obj.type_ != ObjectType::Node {
                 return;
             }
@@ -489,6 +587,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             let id = obj.id;
             let tx_local = tx_for_global.clone();
             let last_state_for_param = Rc::clone(&last_state_for_global);
+            let defaults_for_this_param = Rc::clone(&defaults_for_param);
             let listener = node
                 .add_listener_local()
                 .param(move |_seq, _id, _index, _next, pod| {
@@ -497,6 +596,22 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                         None => return,
                     };
                     if let Some(state) = parse_props_pod(pod) {
+                        // --default-only filter: only applies to physical
+                        // device nodes (sinks + sources). App streams
+                        // bypass — they don't participate in PipeWire's
+                        // default-device routing.
+                        if default_only && matches!(kind, NodeKind::Device) {
+                            let d = defaults_for_this_param.borrow();
+                            let want = match channel {
+                                Channel::Speaker => d.sink.as_deref(),
+                                Channel::Mic => d.source.as_deref(),
+                            };
+                            // No default known yet, or our node isn't
+                            // the active default → suppress.
+                            if want.is_none() || identity.node_name.as_deref() != want {
+                                return;
+                            }
+                        }
                         let mut last = last_state_for_param.borrow_mut();
                         if last.get(&id).copied() != Some(state) {
                             last.insert(id, state);
@@ -518,9 +633,11 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         .global_remove({
             let bound = Rc::clone(&bound_nodes);
             let last = Rc::clone(&last_state);
+            let bound_meta = Rc::clone(&bound_metadata);
             move |id| {
                 bound.borrow_mut().remove(&id);
                 last.borrow_mut().remove(&id);
+                bound_meta.borrow_mut().remove(&id);
             }
         })
         .register();
