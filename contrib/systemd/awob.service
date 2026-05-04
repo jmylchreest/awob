@@ -57,7 +57,10 @@ PrivateTmp=yes
 # Unlinking + rebinding the socket needs write+exec on the parent
 # directory, which `%t/awob.sock` (file-only) doesn't grant.
 ReadWritePaths=%t/
-PrivateDevices=no       # backlight listener reads /sys/class/backlight
+# The backlight listener reads /sys/class/backlight, so we can't hide
+# /dev. systemd unit files don't support inline comments — keep the
+# rationale on its own line above the directive.
+PrivateDevices=no
 ProtectKernelTunables=yes
 ProtectKernelLogs=yes
 ProtectControlGroups=yes
