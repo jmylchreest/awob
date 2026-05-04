@@ -199,6 +199,16 @@ fn spawn_child(state: &mut ChildState, socket_path: Option<&PathBuf>) {
     #[cfg(target_os = "linux")]
     {
         use std::os::unix::process::CommandExt;
+        // SAFETY: The closure runs after fork() and before exec() in the
+        // child, where Rust's normal safety model doesn't apply — the
+        // child shares the parent's address space but only one thread,
+        // so anything that takes a lock or allocates on a global
+        // allocator could deadlock. We only call `prctl(PR_SET_PDEATHSIG)`
+        // via `nix::sys::prctl::set_pdeathsig`, which is a single
+        // async-signal-safe syscall: no allocation, no locking, no
+        // FFI into glibc state. The result is intentionally discarded
+        // because there is no useful recovery — if prctl fails we'd
+        // rather still exec() the listener.
         unsafe {
             cmd.pre_exec(|| {
                 use nix::sys::prctl;

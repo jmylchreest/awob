@@ -21,6 +21,7 @@ use std::collections::HashSet;
 use std::os::fd::AsFd;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use awob_client::listener::wait_for_resource;
@@ -180,14 +181,68 @@ fn parse_state_filter(arg: &str) -> HashSet<BatteryState> {
     out
 }
 
-fn read_string(p: &Path) -> Option<String> {
-    std::fs::read_to_string(p)
-        .ok()
-        .map(|s| s.trim().to_string())
+/// Errors that have already been logged at least once for a given
+/// (path, kind) pair. We dedupe at this granularity so a permission
+/// problem on one sysfs attribute warns once at startup instead of
+/// once per second forever; if the kind transitions (e.g. NotFound →
+/// PermissionDenied after a kernel update) we'll warn again.
+fn warned_io() -> &'static Mutex<HashSet<(PathBuf, std::io::ErrorKind)>> {
+    static W: OnceLock<Mutex<HashSet<(PathBuf, std::io::ErrorKind)>>> = OnceLock::new();
+    W.get_or_init(|| Mutex::new(HashSet::new()))
 }
 
+fn warned_parse() -> &'static Mutex<HashSet<PathBuf>> {
+    static W: OnceLock<Mutex<HashSet<PathBuf>>> = OnceLock::new();
+    W.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+/// Read a sysfs attribute as a trimmed string.
+///
+/// `NotFound` is silent — many battery attributes are optional (a
+/// laptop battery may expose `energy_full` but not `charge_full`, or
+/// vice versa; AC adapters skip `capacity` entirely). Any other error
+/// (typically `PermissionDenied` from a kernel that has tightened
+/// access, or a transient I/O error) is logged at most once per
+/// `(path, ErrorKind)` so we don't silently degrade to "no battery
+/// state" without telling the user why.
+fn read_string(p: &Path) -> Option<String> {
+    match std::fs::read_to_string(p) {
+        Ok(s) => Some(s.trim().to_string()),
+        Err(e) => {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                let key = (p.to_path_buf(), e.kind());
+                let first = warned_io()
+                    .lock()
+                    .map(|mut s| s.insert(key.clone()))
+                    .unwrap_or(true);
+                if first {
+                    tracing::warn!("sysfs read {} failed: {e}", p.display());
+                }
+            }
+            None
+        }
+    }
+}
+
+/// Read a sysfs attribute and parse it as `f64`. Read errors flow
+/// through [`read_string`]; parse errors are logged once per path so
+/// a malformed value (e.g. firmware regression that writes "N/A"
+/// instead of a number) surfaces instead of silently disappearing.
 fn read_f64(p: &Path) -> Option<f64> {
-    read_string(p)?.parse::<f64>().ok()
+    let raw = read_string(p)?;
+    match raw.parse::<f64>() {
+        Ok(v) => Some(v),
+        Err(e) => {
+            let first = warned_parse()
+                .lock()
+                .map(|mut s| s.insert(p.to_path_buf()))
+                .unwrap_or(true);
+            if first {
+                tracing::warn!("sysfs parse {} = {raw:?}: {e}", p.display());
+            }
+            None
+        }
+    }
 }
 
 /// Re-scan cadence when no devices are present yet. Runs forever in the
@@ -796,5 +851,30 @@ mod tests {
         );
         assert_eq!(BatteryState::from_sysfs("Empty"), BatteryState::Empty);
         assert_eq!(BatteryState::from_sysfs("nonsense"), BatteryState::Unknown);
+    }
+
+    #[test]
+    fn read_string_silent_on_missing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("does_not_exist");
+        // ENOENT must return None without logging — battery sysfs has
+        // genuinely-optional attributes.
+        assert!(read_string(&p).is_none());
+    }
+
+    #[test]
+    fn read_f64_returns_some_for_valid() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("val");
+        std::fs::write(&p, "42.5\n").unwrap();
+        assert_eq!(read_f64(&p), Some(42.5));
+    }
+
+    #[test]
+    fn read_f64_none_on_garbage() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("val");
+        std::fs::write(&p, "not-a-number\n").unwrap();
+        assert!(read_f64(&p).is_none());
     }
 }

@@ -185,6 +185,7 @@ dependencies = [
  "awob-client",
  "clap",
  "nix 0.29.0",
+ "tempfile",
  "tracing",
  "tracing-subscriber",
  "udev",
