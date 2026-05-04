@@ -482,10 +482,42 @@ fn update_cache_from_event(
     true
 }
 
-/// Read every battery, aggregate, and fire an OSD if either the
-/// dominant state changed or capacity moved by ≥1%. `force=true`
-/// fires unconditionally (used at startup so the initial state hits
-/// the screen even if nothing's changed since the last daemon boot).
+/// Capacity thresholds that fire an OSD when crossed in either
+/// direction. Anything between these values is silent — the user
+/// doesn't want a "discharging" OSD on every single percentage tick.
+///
+/// Crossings:
+///
+/// * **100 %** — the top boundary, so charging through to "full"
+///   produces a closing OSD.
+/// * **20 % / 10 % / 5 %** — descending warnings as the battery
+///   approaches empty.
+///
+/// State transitions (Charging↔Discharging↔FullyCharged) always fire
+/// regardless of these thresholds — those *are* the events the user
+/// wants to see.
+const ALERT_THRESHOLDS: &[i32] = &[5, 10, 20, 100];
+
+/// True if capacity first reached a threshold on this update.
+/// Direction-agnostic: descending `21 → 20` and ascending `99 → 100`
+/// both fire (curr touches the threshold for the first time).
+fn crossed_threshold(prev: i32, curr: i32) -> bool {
+    ALERT_THRESHOLDS
+        .iter()
+        .any(|&t| (prev > t && curr <= t) || (prev < t && curr >= t))
+}
+
+/// Read every battery, aggregate, and fire an OSD if either:
+///
+/// * the dominant state changed (Discharging↔Charging↔FullyCharged), or
+/// * capacity crossed one of [`ALERT_THRESHOLDS`].
+///
+/// "Discharging from 87 % to 21 %" is silent — only state transitions
+/// and threshold crossings (e.g. crossing 20 %) surface as OSDs.
+///
+/// `force=true` fires unconditionally (used at startup so the initial
+/// state hits the screen even if nothing's changed since the last
+/// daemon boot).
 fn refresh_and_send(
     cache: &std::collections::HashMap<String, BatteryReading>,
     socket: &Option<PathBuf>,
@@ -503,7 +535,7 @@ fn refresh_and_send(
     }
     let pct_int = pct.round() as i32;
     let changed = match *last {
-        Some((prev_state, prev_pct)) => prev_state != state || (prev_pct - pct_int).abs() >= 1,
+        Some((prev_state, prev_pct)) => prev_state != state || crossed_threshold(prev_pct, pct_int),
         None => true,
     };
     if !changed && !force {
@@ -561,6 +593,22 @@ mod tests {
         assert_eq!(pick_style(50.0, BatteryState::Discharging), "normal");
         assert_eq!(pick_style(20.0, BatteryState::Discharging), "warn");
         assert_eq!(pick_style(5.0, BatteryState::Discharging), "critical");
+    }
+
+    #[test]
+    fn alert_threshold_crossings() {
+        // Drift inside a band — silent (the regression we're guarding).
+        assert!(!crossed_threshold(87, 86));
+        assert!(!crossed_threshold(50, 25));
+        assert!(!crossed_threshold(21, 21));
+        // Real threshold crossings — fire.
+        assert!(crossed_threshold(21, 20)); // descending across 20
+        assert!(crossed_threshold(11, 10));
+        assert!(crossed_threshold(6, 5));
+        assert!(crossed_threshold(99, 100)); // ascending across 100
+        // Direction-agnostic — climbing back across also fires.
+        assert!(crossed_threshold(19, 20));
+        assert!(crossed_threshold(4, 10)); // jumps the 5 and 10 boundaries
     }
 
     #[test]
