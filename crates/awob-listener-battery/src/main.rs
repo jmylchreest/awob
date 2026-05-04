@@ -75,6 +75,19 @@ struct Cli {
     /// to surface every state change.
     #[arg(long, default_value = "charging,discharging,empty,fully-charged")]
     states: String,
+
+    /// Comma-separated list of capacity bands that fire an OSD when
+    /// entered. Recognised band names: `empty` (0–5 %), `caution`
+    /// (6–20 %), `low` (21–50 %), `good` (51–80 %), `full`
+    /// (81–100 %). Special values: `all` (every band fires) and
+    /// `none` (only state transitions fire).
+    ///
+    /// Default `empty,caution` — drains past the warning bands surface
+    /// an OSD; the rest of a discharge is silent. State transitions
+    /// (Charging↔Discharging↔FullyCharged) always fire regardless of
+    /// this filter — they're the events the user wants to see.
+    #[arg(long, default_value = "empty,caution")]
+    alert_bands: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -244,31 +257,79 @@ fn aggregate(readings: &[BatteryReading]) -> Option<(f64, BatteryState)> {
     Some((pct, state))
 }
 
+/// One severity band in the capacity range. `upper` is inclusive: a
+/// reading of `pct ≤ upper` falls into this band (after testing the
+/// previous bands in order). Bands cascade so the first match wins.
+///
+/// Band names double as the unit of alert filtering (`--alert-bands`)
+/// and as the OSD style override during discharge — `pick_style`,
+/// `pick_icon`, and `refresh_and_send` all consult the same table.
+struct Band {
+    name: &'static str,
+    upper: i32,
+    /// OSD style applied when discharging. Charging always uses
+    /// `"normal"` regardless — a charging battery isn't a problem.
+    style: &'static str,
+    /// Freedesktop icon name for discharging.
+    icon: &'static str,
+    /// Freedesktop icon name for charging.
+    icon_charging: &'static str,
+}
+
+const BANDS: &[Band] = &[
+    Band {
+        name: "empty",
+        upper: 5,
+        style: "critical",
+        icon: "battery-empty",
+        icon_charging: "battery-empty-charging",
+    },
+    Band {
+        name: "caution",
+        upper: 20,
+        style: "warn",
+        icon: "battery-caution",
+        icon_charging: "battery-caution-charging",
+    },
+    Band {
+        name: "low",
+        upper: 50,
+        style: "normal",
+        icon: "battery-low",
+        icon_charging: "battery-low-charging",
+    },
+    Band {
+        name: "good",
+        upper: 80,
+        style: "normal",
+        icon: "battery-good",
+        icon_charging: "battery-good-charging",
+    },
+    Band {
+        name: "full",
+        upper: 100,
+        style: "normal",
+        icon: "battery-full",
+        icon_charging: "battery-full-charged",
+    },
+];
+
+/// Resolve a percentage to its band. Caps at the topmost band so
+/// out-of-range readings (e.g. 102 % during a calibration tick)
+/// don't panic.
+fn band_for(pct: i32) -> &'static Band {
+    BANDS
+        .iter()
+        .find(|b| pct <= b.upper)
+        .unwrap_or(BANDS.last().unwrap())
+}
+
 fn pick_icon(pct: f64, state: BatteryState) -> &'static str {
-    let charging = matches!(state, BatteryState::Charging | BatteryState::FullyCharged);
-    let bucket = match pct as i32 {
-        v if v >= 80 => "full",
-        v if v >= 50 => "good",
-        v if v >= 25 => "low",
-        v if v >= 10 => "caution",
-        _ => "empty",
-    };
-    if charging {
-        match bucket {
-            "full" => "battery-full-charged",
-            "good" => "battery-good-charging",
-            "low" => "battery-low-charging",
-            "caution" => "battery-caution-charging",
-            _ => "battery-empty-charging",
-        }
+    let band = band_for(pct as i32);
+    if matches!(state, BatteryState::Charging | BatteryState::FullyCharged) {
+        band.icon_charging
     } else {
-        match bucket {
-            "full" => "battery-full",
-            "good" => "battery-good",
-            "low" => "battery-low",
-            "caution" => "battery-caution",
-            _ => "battery-empty",
-        }
+        band.icon
     }
 }
 
@@ -276,13 +337,7 @@ fn pick_style(pct: f64, state: BatteryState) -> &'static str {
     if matches!(state, BatteryState::Charging | BatteryState::FullyCharged) {
         return "normal";
     }
-    if pct < 10.0 {
-        "critical"
-    } else if pct < 25.0 {
-        "warn"
-    } else {
-        "normal"
-    }
+    band_for(pct as i32).style
 }
 
 fn fire(
@@ -314,7 +369,12 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         .map(|s| format!("battery-{s}"))
         .unwrap_or_else(|| "battery".into());
     let state_filter = parse_state_filter(&cli.states);
-    tracing::info!("source={source} states={} (sysfs + udev)", cli.states);
+    let alert_bands = parse_alert_bands(&cli.alert_bands);
+    tracing::info!(
+        "source={source} states={} alert-bands={} (sysfs + udev)",
+        cli.states,
+        cli.alert_bands
+    );
 
     let batteries = discover_batteries();
     if batteries.is_empty() {
@@ -332,7 +392,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         .listen()?;
     let monitor_fd = monitor.as_fd();
 
-    let mut last: Option<(BatteryState, i32)> = None;
+    let mut last: Option<(BatteryState, &'static str)> = None;
     let mut last_rescan = Instant::now();
     // Per-battery cache of state + capacity, keyed by the kernel's
     // POWER_SUPPLY_NAME. Updated authoritatively by uevent properties
@@ -358,7 +418,15 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             cache.insert(name, r);
         }
     }
-    refresh_and_send(&cache, &cli.socket, &source, &state_filter, &mut last, true);
+    refresh_and_send(
+        &cache,
+        &cli.socket,
+        &source,
+        &state_filter,
+        &alert_bands,
+        &mut last,
+        true,
+    );
 
     loop {
         let now = Instant::now();
@@ -424,6 +492,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 &cli.socket,
                 &source,
                 &state_filter,
+                &alert_bands,
                 &mut last,
                 false,
             );
@@ -483,37 +552,45 @@ fn update_cache_from_event(
 }
 
 /// Capacity thresholds that fire an OSD when crossed in either
-/// direction. Anything between these values is silent — the user
-/// doesn't want a "discharging" OSD on every single percentage tick.
-///
-/// Crossings:
-///
-/// * **100 %** — the top boundary, so charging through to "full"
-///   produces a closing OSD.
-/// * **20 % / 10 % / 5 %** — descending warnings as the battery
-///   approaches empty.
-///
-/// State transitions (Charging↔Discharging↔FullyCharged) always fire
-/// regardless of these thresholds — those *are* the events the user
-/// wants to see.
-const ALERT_THRESHOLDS: &[i32] = &[5, 10, 20, 100];
-
-/// True if capacity first reached a threshold on this update.
-/// Direction-agnostic: descending `21 → 20` and ascending `99 → 100`
-/// both fire (curr touches the threshold for the first time).
-fn crossed_threshold(prev: i32, curr: i32) -> bool {
-    ALERT_THRESHOLDS
-        .iter()
-        .any(|&t| (prev > t && curr <= t) || (prev < t && curr >= t))
+/// Parse the `--alert-bands` argument into a set of band names.
+/// Recognises every band name from [`BANDS`] plus `all` (every band)
+/// and `none` (only state transitions fire).
+fn parse_alert_bands(arg: &str) -> HashSet<&'static str> {
+    let mut out = HashSet::new();
+    for token in arg.split(',') {
+        let t = token.trim();
+        if t.is_empty() {
+            continue;
+        }
+        if t.eq_ignore_ascii_case("all") {
+            for b in BANDS {
+                out.insert(b.name);
+            }
+            continue;
+        }
+        if t.eq_ignore_ascii_case("none") {
+            // Explicit "no bands" — caller will only see OSDs on
+            // state transitions. Returning an empty set conveys that.
+            out.clear();
+            return out;
+        }
+        if let Some(b) = BANDS.iter().find(|b| b.name.eq_ignore_ascii_case(t)) {
+            out.insert(b.name);
+        } else {
+            tracing::info!("unknown band `{t}` in --alert-bands");
+        }
+    }
+    out
 }
 
 /// Read every battery, aggregate, and fire an OSD if either:
 ///
 /// * the dominant state changed (Discharging↔Charging↔FullyCharged), or
-/// * capacity crossed one of [`ALERT_THRESHOLDS`].
+/// * capacity entered a new band whose name is in `alert_bands`.
 ///
-/// "Discharging from 87 % to 21 %" is silent — only state transitions
-/// and threshold crossings (e.g. crossing 20 %) surface as OSDs.
+/// "Discharging from 87 % to 21 %" is silent unless `low` and/or
+/// `caution` are in `alert_bands` — only band entries we explicitly
+/// asked about and state transitions surface as OSDs.
 ///
 /// `force=true` fires unconditionally (used at startup so the initial
 /// state hits the screen even if nothing's changed since the last
@@ -523,7 +600,8 @@ fn refresh_and_send(
     socket: &Option<PathBuf>,
     source: &str,
     state_filter: &HashSet<BatteryState>,
-    last: &mut Option<(BatteryState, i32)>,
+    alert_bands: &HashSet<&'static str>,
+    last: &mut Option<(BatteryState, &'static str)>,
     force: bool,
 ) {
     let readings: Vec<BatteryReading> = cache.values().cloned().collect();
@@ -534,14 +612,17 @@ fn refresh_and_send(
         return;
     }
     let pct_int = pct.round() as i32;
+    let band = band_for(pct_int);
     let changed = match *last {
-        Some((prev_state, prev_pct)) => prev_state != state || crossed_threshold(prev_pct, pct_int),
+        Some((prev_state, prev_band_name)) => {
+            prev_state != state || (band.name != prev_band_name && alert_bands.contains(band.name))
+        }
         None => true,
     };
     if !changed && !force {
         return;
     }
-    *last = Some((state, pct_int));
+    *last = Some((state, band.name));
     if let Err(e) = fire(socket, source, pct, state) {
         tracing::info!("send: {e}");
     }
@@ -596,19 +677,51 @@ mod tests {
     }
 
     #[test]
-    fn alert_threshold_crossings() {
-        // Drift inside a band — silent (the regression we're guarding).
-        assert!(!crossed_threshold(87, 86));
-        assert!(!crossed_threshold(50, 25));
-        assert!(!crossed_threshold(21, 21));
-        // Real threshold crossings — fire.
-        assert!(crossed_threshold(21, 20)); // descending across 20
-        assert!(crossed_threshold(11, 10));
-        assert!(crossed_threshold(6, 5));
-        assert!(crossed_threshold(99, 100)); // ascending across 100
-        // Direction-agnostic — climbing back across also fires.
-        assert!(crossed_threshold(19, 20));
-        assert!(crossed_threshold(4, 10)); // jumps the 5 and 10 boundaries
+    fn band_for_lookup() {
+        assert_eq!(band_for(0).name, "empty");
+        assert_eq!(band_for(5).name, "empty");
+        assert_eq!(band_for(6).name, "caution");
+        assert_eq!(band_for(20).name, "caution");
+        assert_eq!(band_for(21).name, "low");
+        assert_eq!(band_for(50).name, "low");
+        assert_eq!(band_for(51).name, "good");
+        assert_eq!(band_for(80).name, "good");
+        assert_eq!(band_for(81).name, "full");
+        assert_eq!(band_for(100).name, "full");
+        // Out-of-range readings cap at the topmost band.
+        assert_eq!(band_for(102).name, "full");
+    }
+
+    #[test]
+    fn parse_alert_bands_defaults() {
+        let s = parse_alert_bands("empty,caution");
+        assert!(s.contains("empty"));
+        assert!(s.contains("caution"));
+        assert!(!s.contains("low"));
+        assert_eq!(s.len(), 2);
+    }
+
+    #[test]
+    fn parse_alert_bands_all() {
+        let s = parse_alert_bands("all");
+        assert_eq!(s.len(), BANDS.len());
+    }
+
+    #[test]
+    fn parse_alert_bands_none() {
+        let s = parse_alert_bands("none");
+        assert!(s.is_empty());
+        // `none` wins even if mixed with named bands — caller asked for silence.
+        let s2 = parse_alert_bands("empty,none,caution");
+        assert!(s2.is_empty());
+    }
+
+    #[test]
+    fn parse_alert_bands_unknown_is_ignored() {
+        let s = parse_alert_bands("empty,bogus,caution");
+        assert!(s.contains("empty"));
+        assert!(s.contains("caution"));
+        assert_eq!(s.len(), 2);
     }
 
     #[test]
