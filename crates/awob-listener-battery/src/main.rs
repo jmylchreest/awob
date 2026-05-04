@@ -382,7 +382,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
     for b in &batteries {
-        tracing::info!("  battery: {}", b.display());
+        tracing::info!("battery: {}", b.display());
     }
 
     // Subscribe to power_supply uevents. Captures AC plug, battery
