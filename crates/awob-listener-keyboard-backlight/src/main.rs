@@ -1,13 +1,21 @@
 //! awob keyboard-backlight listener.
 //!
-//! Watches a `/sys/class/leds/<kbd>/brightness` node via `notify` and emits
-//! an OSD on every change. Auto-discovers a keyboard-backlight LED by
-//! pattern-matching against device names containing `kbd` or `keyboard`.
+//! Watches a `/sys/class/leds/<kbd>/brightness` node and emits an OSD on
+//! every change. Auto-discovers a keyboard-backlight LED by pattern-
+//! matching against device names containing `kbd` or `keyboard`.
 //!
-//! Same `notify`-driven event loop as `awob-listener-backlight` — the kernel
-//! signals on every write to the sysfs file, no polling. Reads
-//! `max_brightness` from the same directory and forwards it as the send's
-//! `max`.
+//! Why both polling and inotify? On hardware where userspace writes the
+//! sysfs file (most laptops driven via brightnessctl-style hotkeys) inotify
+//! fires immediately on the write, so we wake within microseconds.
+//!
+//! On hardware where the embedded controller / firmware handles the
+//! brightness key directly (Framework laptops with the chromeos EC,
+//! some Chromebooks, certain Apple keyboards) the kernel updates the
+//! cached sysfs value but the LED driver never calls `kernfs_notify()`
+//! — so no inotify event ever reaches us, and udev `change` events
+//! aren't fired either. The 250 ms polling backstop catches those
+//! cases at the cost of a four-byte sysfs read every quarter-second.
+//! Cheap insurance.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -144,12 +152,22 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
 
     let mut last = initial;
     let debounce = Duration::from_millis(40);
+    let poll_interval = Duration::from_millis(250);
     loop {
-        if rx.recv().is_err() {
-            break;
+        match rx.recv_timeout(poll_interval) {
+            Ok(()) => {
+                // inotify fired — coalesce any rapid follow-up events
+                // before re-reading sysfs.
+                std::thread::sleep(debounce);
+                while rx.try_recv().is_ok() {}
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                // No inotify; fall through to the same read-and-compare
+                // path that the inotify branch uses. This is the
+                // backstop for firmware-driven LED updates.
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
         }
-        std::thread::sleep(debounce);
-        while rx.try_recv().is_ok() {}
         let current = read_u32(&brightness_path).unwrap_or(last as u32) as f64;
         if (current - last).abs() < f64::EPSILON {
             continue;
