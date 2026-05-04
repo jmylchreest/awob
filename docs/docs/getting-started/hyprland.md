@@ -35,6 +35,18 @@ If you're using `uwsm` (Universal Wayland Session Manager), the
 unit's `WantedBy=graphical-session.target` plays nice with it
 without any extra config.
 
+If you're **not** using uwsm and your systemd user instance doesn't
+reach `graphical-session.target` automatically, the simplest fallback
+is to add `awob-daemon` to Hyprland's startup directly:
+
+```ini
+# ~/.config/hypr/hyprland.conf
+exec-once = awob-daemon
+```
+
+Pick one or the other — running both means two daemons fighting for
+the IPC socket.
+
 ## Pattern B: keybind-driven via `awob send`
 
 If you'd rather not run listeners — or need finer-grained control

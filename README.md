@@ -32,7 +32,33 @@ https://github.com/user-attachments/assets/c8455de5-f147-44d3-a8f9-01da59708e82
 
 ## Install
 
-From source (Linux + Wayland required):
+### Arch (AUR)
+
+```sh
+# Daemon + CLI + every official listener + the systemd user unit.
+paru -S awob-bin awob-listeners-all
+# (yay -S … works identically.)
+
+# Auto-start with your graphical session.
+systemctl --user enable --now awob.service
+```
+
+That's enough on Hyprland with `uwsm`, GNOME, KDE Plasma, and any
+other compositor that wires up systemd's `graphical-session.target`.
+On compositors that don't, add the daemon to your autostart instead:
+
+```ini
+# ~/.config/hypr/hyprland.conf
+exec-once = awob-daemon
+```
+
+Pick a finer-grained subset if you don't want every listener:
+`awob-bin` plus any of `awob-listener-pipewire-bin`,
+`awob-listener-battery-bin`, `awob-listener-backlight-bin`,
+`awob-listener-keyboard-backlight-bin`, `awob-listener-wob-bin`.
+`awob-git` builds the whole workspace from `main`.
+
+### From source
 
 ```sh
 cargo install --path crates/awob-cli       # `awob` CLI

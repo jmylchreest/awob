@@ -13,13 +13,47 @@ the [GNOME setup page](/getting-started/gnome) for the current state.
 
 ## Distro packages
 
-| Distro | Package | Notes |
-|---|---|---|
-| Arch (AUR) | `awob-bin` | Prebuilt; tracks tagged releases. |
-| Arch (AUR) | `awob-git` | Builds from the latest `main`. |
+### Arch (AUR)
 
-Other distros: build from source. There's no `apt` / `dnf` package
-yet — open an issue if you'd like to maintain one.
+The full set of awob packages on AUR:
+
+| Package | Contents |
+|---|---|
+| `awob-bin` | Daemon + CLI + stock themes + systemd user unit. The minimum viable install. |
+| `awob-listener-pipewire-bin` | PipeWire volume / mute listener. |
+| `awob-listener-battery-bin` | Battery + AC state listener. |
+| `awob-listener-backlight-bin` | Display backlight listener. |
+| `awob-listener-keyboard-backlight-bin` | Keyboard backlight listener. |
+| `awob-listener-wob-bin` | wob-protocol FIFO bridge. |
+| `awob-listeners-all` | Meta-package — pulls every listener above. No payload. |
+| `awob-git` | From-source build of `main`: daemon + CLI + every listener + themes + systemd unit. |
+
+Quick paths:
+
+```sh
+# Kitchen-sink: daemon + every listener.
+paru -S awob-bin awob-listeners-all
+
+# Daemon + a hand-picked listener subset.
+paru -S awob-bin awob-listener-pipewire-bin awob-listener-battery-bin
+
+# Track main from source.
+paru -S awob-git
+```
+
+`yay` works identically. Then enable the systemd user unit:
+
+```sh
+systemctl --user enable --now awob.service
+```
+
+Once enabled, the auto-discovery in the daemon spawns each
+`awob-listener-*` binary it finds on `PATH` — no extra config.
+
+### Other distros
+
+No `apt` / `dnf` package yet. Build from source (below) — open an
+issue if you'd like to maintain a package.
 
 ## From source
 
