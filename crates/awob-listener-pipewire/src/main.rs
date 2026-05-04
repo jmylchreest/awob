@@ -612,9 +612,22 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                                 return;
                             }
                         }
+                        // First observation of this node: silently seed
+                        // `last` and return. Same policy as the rest of
+                        // awob's listeners (see aide decision
+                        // `awob-listener-startup-silent`). PipeWire's
+                        // `Props` param is emitted synchronously when
+                        // we subscribe, so without this check every
+                        // sink/source would fire an OSD on daemon
+                        // start. The user wants OSDs only on real
+                        // changes, not on bookkeeping observations.
                         let mut last = last_state_for_param.borrow_mut();
-                        if last.get(&id).copied() != Some(state) {
-                            last.insert(id, state);
+                        let prev = last.insert(id, state);
+                        let real_change = match prev {
+                            Some(p) => p != state,
+                            None => false,
+                        };
+                        if real_change {
                             let _ = tx_local.send(VolumeEvent {
                                 channel,
                                 kind,
