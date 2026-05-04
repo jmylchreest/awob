@@ -304,6 +304,55 @@ jobs:
           name: awob-${{ needs.prepare.outputs.version }}-aur-staged
           path: aur-staged
 
+      # Defensive: pre-align the AUR remote's HEAD onto `master`. The
+      # KSXGitHub action clones whatever HEAD points at; if a previous
+      # publish left HEAD pointing at an orphan SHA (bug observed on
+      # awob-listener-{backlight,battery}-bin in v0.1.3 + v0.1.4 runs),
+      # the clone goes detached and `git push origin master` then fails
+      # with "src refspec master does not match any". This step is a
+      # no-op on the happy path (HEAD already points at master) and
+      # silently swallows missing-package errors so brand-new AUR
+      # packages don't trip it.
+      - name: Pre-align AUR HEAD to master (one-time fix-up)
+        if: matrix.pkgname != 'awob-git' || steps.changed.outputs.skip != 'true'
+        env:
+          AUR_KEY: ${{ secrets.AUR_KEY }}
+          PKG: ${{ matrix.pkgname }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$AUR_KEY" > ~/.ssh/aur && chmod 600 ~/.ssh/aur
+          ssh-keyscan -t rsa,ed25519 aur.archlinux.org > ~/.ssh/known_hosts 2>/dev/null
+          cat > ~/.ssh/config <<'CONF'
+          Host aur.archlinux.org
+            User aur
+            IdentityFile ~/.ssh/aur
+            IdentitiesOnly yes
+          CONF
+          chmod 600 ~/.ssh/config
+
+          tmp=$(mktemp -d)
+          if ! git clone "ssh://aur@aur.archlinux.org/${PKG}.git" "$tmp/repo" 2>/dev/null; then
+            echo "::notice::AUR remote ${PKG} not yet present (new package); skipping pre-align"
+            rm -rf "$tmp"
+            exit 0
+          fi
+          cd "$tmp/repo"
+          if [[ -z "$(git symbolic-ref --quiet HEAD || true)" ]]; then
+            # HEAD is detached on the remote. Force a local master at
+            # the same SHA HEAD pointed at, then push it. This realigns
+            # the remote's symbolic HEAD onto refs/heads/master so the
+            # next clone (the publish step below) lands on master and
+            # the action's `push origin master` succeeds.
+            echo "::warning::${PKG} AUR remote was in detached-HEAD state; realigning master"
+            git -c user.name="jmylchreest" -c user.email="jmylchreest@gmail.com" \
+                checkout -B master
+            git -c user.name="jmylchreest" -c user.email="jmylchreest@gmail.com" \
+                -c commit.gpgsign=false push origin master --force-with-lease
+          fi
+          cd /
+          rm -rf "$tmp"
+
       - name: Publish ${{ matrix.pkgname }} to AUR
         if: matrix.pkgname != 'awob-git' || steps.changed.outputs.skip != 'true'
         uses: KSXGitHub/github-actions-deploy-aur@v4.1.3
