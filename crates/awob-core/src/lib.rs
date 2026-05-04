@@ -7,6 +7,7 @@
 //! Renderer (tiny-skia) lives in `render.rs` and is implemented separately
 //! from the scene parser so the parser can be unit-tested in isolation.
 
+pub mod animation;
 pub mod bindings;
 pub mod colour;
 pub mod expr;

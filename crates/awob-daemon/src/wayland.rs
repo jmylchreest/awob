@@ -627,16 +627,27 @@ impl State {
         frame_bindings.set("value", Value::Number(interp_value));
         frame_bindings.set("transitionProgress", Value::Number(transition_progress));
 
-        let pm = match self
-            .renderer
-            .render(self.theme.as_ref().unwrap(), &frame_bindings)
-        {
-            Ok(p) => p,
-            Err(e) => {
-                tracing::warn!("render: {e}");
-                return;
-            }
+        // Show-phase elapsed (after fade-in completes) drives per-element
+        // animations like `pulse=true`. None during fade-in/out keeps
+        // animations off until the OSD is fully on screen.
+        let phase = self.current_phase();
+        let show_elapsed = if matches!(phase, Phase::Show) {
+            Some(elapsed.saturating_sub(fade_in))
+        } else {
+            None
         };
+
+        let pm =
+            match self
+                .renderer
+                .render(self.theme.as_ref().unwrap(), &frame_bindings, show_elapsed)
+            {
+                Ok(p) => p,
+                Err(e) => {
+                    tracing::warn!("render: {e}");
+                    return;
+                }
+            };
         let width = pm.width() as i32;
         let height = pm.height() as i32;
         let stride = width * 4;
@@ -668,12 +679,20 @@ impl State {
             Phase::Show => {
                 // The value transition is sequenced *after* fade-in, so the
                 // window we need 60Hz for during Show is `fade_in +
-                // transition`. After that the bar is settled and we can
-                // sleep until fade-out.
+                // transition`. After that the bar is settled — but if
+                // any element has an active animation (`pulse=true`
+                // etc.) we keep redrawing at 30fps so the animation
+                // actually plays. Without an animation this falls
+                // through to a single sleep until fade-out.
                 let elapsed = Instant::now().saturating_duration_since(self.sent_at);
                 let animation_window = self.surface_def.fade_in + self.transition_duration;
                 if elapsed < animation_window {
                     Some(Duration::from_millis(16))
+                } else if self.has_active_element_animations() {
+                    // 30fps cap during pulse / breathe / etc. — same
+                    // throughput as a slow video, plenty for a transient
+                    // OSD, doesn't burn battery on integrated GPUs.
+                    Some(Duration::from_millis(33))
                 } else {
                     let start = self.cycle_start?;
                     let elapsed_cycle = Instant::now().saturating_duration_since(start);
@@ -684,6 +703,21 @@ impl State {
             }
             Phase::Done => None,
         }
+    }
+
+    /// True if the active theme has at least one element with a
+    /// non-empty `animations` list. Drives the 30fps redraw loop
+    /// during the show phase — without this check we'd sleep until
+    /// fade-out and miss every pulse cycle.
+    fn has_active_element_animations(&self) -> bool {
+        let Some(theme) = &self.theme else {
+            return false;
+        };
+        theme
+            .scene
+            .elements
+            .iter()
+            .any(|el| !el.common().animations.is_empty())
     }
 
     fn tick(&mut self) {

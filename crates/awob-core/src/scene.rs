@@ -159,6 +159,15 @@ impl Element {
             Element::Bar(e) => e.common.z,
         }
     }
+
+    pub fn common(&self) -> &Common {
+        match self {
+            Element::Rect(e) => &e.common,
+            Element::Text(e) => &e.common,
+            Element::Image(e) => &e.common,
+            Element::Bar(e) => &e.common,
+        }
+    }
 }
 
 /// Attribute value: any element attribute can be a literal length, a static
@@ -211,6 +220,10 @@ pub struct Common {
     pub anchor: Option<Anchor>,
     pub x: AttrValue,
     pub y: AttrValue,
+    /// Per-element animations evaluated each frame during the show
+    /// window. Populated from the `pulse=true` family of KDL attrs
+    /// today; the future `@animate` DSL produces the same struct.
+    pub animations: Vec<crate::animation::ElementAnimation>,
 }
 
 #[derive(Debug, Clone)]

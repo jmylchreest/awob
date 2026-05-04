@@ -70,8 +70,16 @@ impl Renderer {
     /// Render the theme's scene against the given bindings into a pixmap.
     ///
     /// The pixmap is sized to the theme's surface dimensions and fully
-    /// cleared (transparent) before drawing.
-    pub fn render(&mut self, theme: &Theme, bindings: &Bindings) -> Result<Pixmap, RenderError> {
+    /// cleared (transparent) before drawing. `show_elapsed` is the time
+    /// since the active OSD's show phase started; per-element animations
+    /// (`pulse=true` etc.) evaluate against it. Pass `None` for static
+    /// renders (tests, snapshot mode).
+    pub fn render(
+        &mut self,
+        theme: &Theme,
+        bindings: &Bindings,
+        show_elapsed: Option<std::time::Duration>,
+    ) -> Result<Pixmap, RenderError> {
         let w = theme.surface.width.max(1);
         let h = theme.surface.height.max(1);
         let mut pixmap = Pixmap::new(w, h)
@@ -85,18 +93,40 @@ impl Renderer {
 
         let elements = sorted_by_z(&theme.scene.elements);
         for element in elements {
-            self.draw_element(element, &frame, bindings, &mut pixmap)?;
+            let alpha_mul = element_alpha_mul(element, show_elapsed);
+            self.draw_element(element, &frame, bindings, alpha_mul, &mut pixmap)?;
         }
 
         Ok(pixmap)
     }
 }
 
+/// Evaluate an element's `Alpha`-target animations against the current
+/// show-phase elapsed time and produce a single multiplier in
+/// `[0.0, 1.0]`. Returns `1.0` if the element has no animations or
+/// if `show_elapsed` is `None` (static render).
+fn element_alpha_mul(el: &Element, show_elapsed: Option<std::time::Duration>) -> f32 {
+    let Some(t) = show_elapsed else { return 1.0 };
+    let common = match el {
+        Element::Rect(r) => &r.common,
+        Element::Text(t) => &t.common,
+        Element::Image(i) => &i.common,
+        Element::Bar(b) => &b.common,
+    };
+    let mut mul = 1.0_f32;
+    for anim in &common.animations {
+        if matches!(anim.target, crate::animation::AnimProperty::Alpha) {
+            mul *= anim.evaluate(t);
+        }
+    }
+    mul.clamp(0.0, 1.0)
+}
+
 /// Convenience function for one-off rendering (tests). Each call creates a
 /// fresh Renderer — for production the daemon constructs a [`Renderer`] once
 /// and reuses it.
 pub fn render_to_pixmap(theme: &Theme, bindings: &Bindings) -> Result<Pixmap, RenderError> {
-    Renderer::new().render(theme, bindings)
+    Renderer::new().render(theme, bindings, None)
 }
 
 fn sorted_by_z(elements: &[Element]) -> Vec<&Element> {
@@ -125,13 +155,14 @@ impl Renderer {
         el: &Element,
         frame: &Frame,
         b: &Bindings,
+        alpha_mul: f32,
         pm: &mut Pixmap,
     ) -> Result<(), RenderError> {
         match el {
-            Element::Rect(r) => self.draw_rect_with_shadow(r, frame, b, pm),
-            Element::Bar(r) => draw_bar(r, frame, b, pm),
-            Element::Text(t) => self.draw_text(t, frame, b, pm),
-            Element::Image(i) => self.draw_image(i, frame, b, pm),
+            Element::Rect(r) => self.draw_rect_with_shadow(r, frame, b, alpha_mul, pm),
+            Element::Bar(r) => draw_bar(r, frame, b, alpha_mul, pm),
+            Element::Text(t) => self.draw_text(t, frame, b, alpha_mul, pm),
+            Element::Image(i) => self.draw_image(i, frame, b, alpha_mul, pm),
         }
     }
 
@@ -140,6 +171,7 @@ impl Renderer {
         t: &TextEl,
         frame: &Frame,
         b: &Bindings,
+        alpha_mul: f32,
         pm: &mut Pixmap,
     ) -> Result<(), RenderError> {
         let label = t.value.render(b)?;
@@ -158,7 +190,14 @@ impl Renderer {
             .as_ref()
             .and_then(|a| try_render_colour(a, b))
             .unwrap_or(Colour::rgb(0xff, 0xff, 0xff));
-        self.text.draw(pm, bb_x, bb_y, &label, &font_spec, colour);
+        self.text.draw(
+            pm,
+            bb_x,
+            bb_y,
+            &label,
+            &font_spec,
+            with_alpha(colour, alpha_mul),
+        );
         Ok(())
     }
 
@@ -167,6 +206,7 @@ impl Renderer {
         i: &ImageEl,
         frame: &Frame,
         b: &Bindings,
+        alpha_mul: f32,
         pm: &mut Pixmap,
     ) -> Result<(), RenderError> {
         let bb = resolve_box(&i.common, &i.size, frame, b)?;
@@ -205,6 +245,9 @@ impl Renderer {
             if let Some(c) = tint_to {
                 crate::icon::tint_pixmap(&mut icon_pm, c);
             }
+            if alpha_mul < 1.0 {
+                crate::icon::scale_pixmap_alpha(&mut icon_pm, alpha_mul);
+            }
             blit_pixmap(pm, &icon_pm, bb.x, bb.y);
             return Ok(());
         }
@@ -213,7 +256,12 @@ impl Renderer {
             .get("fg")
             .copied()
             .unwrap_or(Colour::rgb(0xff, 0xff, 0xff));
-        fill_rounded_rect(pm, bb, bb.w.min(bb.h) / 4.0, with_alpha(colour, 0.25));
+        fill_rounded_rect(
+            pm,
+            bb,
+            bb.w.min(bb.h) / 4.0,
+            with_alpha(colour, 0.25 * alpha_mul),
+        );
         Ok(())
     }
 }
@@ -265,6 +313,7 @@ impl Renderer {
         r: &RectEl,
         frame: &Frame,
         b: &Bindings,
+        alpha_mul: f32,
         pm: &mut Pixmap,
     ) -> Result<(), RenderError> {
         if let Some(shadow_attr) = &r.shadow {
@@ -281,7 +330,7 @@ impl Renderer {
                 }
             }
         }
-        draw_rect(r, frame, b, pm)
+        draw_rect(r, frame, b, alpha_mul, pm)
     }
 
     fn draw_shadow(
@@ -367,7 +416,13 @@ fn blit_shadow_mask(
     }
 }
 
-fn draw_rect(r: &RectEl, frame: &Frame, b: &Bindings, pm: &mut Pixmap) -> Result<(), RenderError> {
+fn draw_rect(
+    r: &RectEl,
+    frame: &Frame,
+    b: &Bindings,
+    alpha_mul: f32,
+    pm: &mut Pixmap,
+) -> Result<(), RenderError> {
     let bb = resolve_box(&r.common, &r.size, frame, b)?;
     let radius = r
         .radius
@@ -380,7 +435,7 @@ fn draw_rect(r: &RectEl, frame: &Frame, b: &Bindings, pm: &mut Pixmap) -> Result
         .as_ref()
         .and_then(|a| try_render_colour(a, b))
         .unwrap_or(Colour::TRANSPARENT);
-    fill_rounded_rect(pm, bb, radius, fill);
+    fill_rounded_rect(pm, bb, radius, with_alpha(fill, alpha_mul));
     if let Some(stroke_attr) = &r.stroke {
         if let Some(stroke_color) = try_render_colour(stroke_attr, b) {
             let sw = r
@@ -389,13 +444,19 @@ fn draw_rect(r: &RectEl, frame: &Frame, b: &Bindings, pm: &mut Pixmap) -> Result
                 .map(|a| a.render_number(b))
                 .transpose()?
                 .unwrap_or(1.0) as f32;
-            stroke_rounded_rect(pm, bb, radius, sw, stroke_color);
+            stroke_rounded_rect(pm, bb, radius, sw, with_alpha(stroke_color, alpha_mul));
         }
     }
     Ok(())
 }
 
-fn draw_bar(r: &BarEl, frame: &Frame, b: &Bindings, pm: &mut Pixmap) -> Result<(), RenderError> {
+fn draw_bar(
+    r: &BarEl,
+    frame: &Frame,
+    b: &Bindings,
+    alpha_mul: f32,
+    pm: &mut Pixmap,
+) -> Result<(), RenderError> {
     let bb = resolve_box(&r.common, &r.size, frame, b)?;
     let value = r.value.render_number(b)?;
     let max = r
@@ -445,7 +506,7 @@ fn draw_bar(r: &BarEl, frame: &Frame, b: &Bindings, pm: &mut Pixmap) -> Result<(
         w: bb.w * progress as f32,
         ..bb
     };
-    fill_rounded_rect(pm, filled, radius, fill_color);
+    fill_rounded_rect(pm, filled, radius, with_alpha(fill_color, alpha_mul));
 
     // Wedge overlay. Only drawn when growing — `from < value` — so the
     // wedge represents new territory being claimed by the bar. For
@@ -488,7 +549,14 @@ fn draw_bar(r: &BarEl, frame: &Frame, b: &Bindings, pm: &mut Pixmap) -> Result<(
                 w: wedge_w,
                 ..bb
             };
-            fill_partial_rounded_rect(pm, wedge_box, radius, delta_color, false, true);
+            fill_partial_rounded_rect(
+                pm,
+                wedge_box,
+                radius,
+                with_alpha(delta_color, alpha_mul),
+                false,
+                true,
+            );
         }
     }
     Ok(())

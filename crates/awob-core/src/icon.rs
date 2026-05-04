@@ -200,6 +200,26 @@ impl IconResolver {
     }
 }
 
+/// Multiply every pixel's alpha (and RGB, since the input is
+/// premultiplied) by `mul`. Used by the renderer's animation engine
+/// to apply a per-element alpha modulation to icon pixmaps —
+/// `tint_pixmap` only handles the colour replacement, not free
+/// scaling, so this is the gap-filler for `pulse=true` on `image`
+/// elements.
+pub fn scale_pixmap_alpha(pm: &mut Pixmap, mul: f32) {
+    let m = mul.clamp(0.0, 1.0);
+    if (m - 1.0).abs() < f32::EPSILON {
+        return;
+    }
+    let data = pm.data_mut();
+    for px in data.chunks_exact_mut(4) {
+        px[0] = ((px[0] as f32) * m) as u8;
+        px[1] = ((px[1] as f32) * m) as u8;
+        px[2] = ((px[2] as f32) * m) as u8;
+        px[3] = ((px[3] as f32) * m) as u8;
+    }
+}
+
 /// Tint a pre-rasterised pixmap to a flat colour by replacing each pixel's
 /// RGB with the given colour while preserving its existing alpha. The result
 /// stays premultiplied (input already is).

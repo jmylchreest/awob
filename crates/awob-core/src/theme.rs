@@ -404,7 +404,81 @@ fn parse_common(node: &KdlNode) -> Result<Common, ThemeError> {
     let anchor = attr_str(node, "anchor").as_deref().and_then(Anchor::parse);
     let x = attr(node, "x")?.unwrap_or_else(|| AttrValue::parse("0").unwrap());
     let y = attr(node, "y")?.unwrap_or_else(|| AttrValue::parse("0").unwrap());
-    Ok(Common { z, anchor, x, y })
+    let animations = parse_animations(node);
+    Ok(Common {
+        z,
+        anchor,
+        x,
+        y,
+        animations,
+    })
+}
+
+/// Parse animation attributes off a KDL element node into the
+/// engine's `ElementAnimation` representation. Currently recognises
+/// the `pulse` family:
+///
+/// * `pulse=true` enables an alpha pulse on this element.
+/// * `pulse-rate` accepts `"<n>Hz"` or a bare number (Hz). Default
+///   `1Hz` (one full ping-pong cycle per second).
+/// * `pulse-depth` accepts `"<n>%"` or a 0..1 fraction. Default
+///   `40%` — alpha cycles between `1.0 - depth` and `1.0`.
+///
+/// Returns an empty vec for elements with no animation attributes.
+fn parse_animations(node: &KdlNode) -> Vec<crate::animation::ElementAnimation> {
+    use crate::animation::{AnimCurve, AnimProperty, ElementAnimation, LoopMode};
+
+    let mut out = Vec::new();
+    if !attr_bool(node, "pulse").unwrap_or(false) {
+        return out;
+    }
+    let rate_hz = attr_str(node, "pulse-rate")
+        .as_deref()
+        .and_then(parse_frequency_hz)
+        .unwrap_or(1.0);
+    let depth = attr_str(node, "pulse-depth")
+        .as_deref()
+        .and_then(parse_unit_fraction)
+        .unwrap_or(0.4);
+    // duration is the half-period — ping-pong covers from→to in this
+    // many milliseconds, then to→from in another half-period.
+    let half_period_ms = ((1.0 / rate_hz) * 1000.0 / 2.0).max(1.0) as u64;
+    out.push(ElementAnimation {
+        target: AnimProperty::Alpha,
+        curve: AnimCurve::SineInOut,
+        from: 1.0 - depth,
+        to: 1.0,
+        duration: std::time::Duration::from_millis(half_period_ms),
+        loop_mode: LoopMode::PingPong,
+        delay: std::time::Duration::ZERO,
+    });
+    out
+}
+
+/// `"1Hz"`, `"500mHz"`, or a bare float (interpreted as Hz). Check
+/// the `mHz` suffix before `Hz` because `Hz` is a suffix of `mHz`.
+fn parse_frequency_hz(s: &str) -> Option<f32> {
+    let t = s.trim();
+    if let Some(num) = t.strip_suffix("mHz").or_else(|| t.strip_suffix("mhz")) {
+        return num.trim().parse::<f32>().ok().map(|v| v / 1000.0);
+    }
+    if let Some(num) = t.strip_suffix("Hz").or_else(|| t.strip_suffix("hz")) {
+        return num.trim().parse().ok();
+    }
+    t.parse().ok()
+}
+
+/// `"40%"` → 0.4; `"0.4"` → 0.4. Clamped to `[0.0, 1.0]`.
+fn parse_unit_fraction(s: &str) -> Option<f32> {
+    let t = s.trim();
+    if let Some(num) = t.strip_suffix('%') {
+        return num
+            .trim()
+            .parse::<f32>()
+            .ok()
+            .map(|v| (v / 100.0).clamp(0.0, 1.0));
+    }
+    t.parse::<f32>().ok().map(|v| v.clamp(0.0, 1.0))
 }
 
 fn parse_size(node: &KdlNode) -> Result<Sized, ThemeError> {
@@ -451,6 +525,34 @@ fn attr_int(node: &KdlNode, name: &str) -> Option<i64> {
         if let Some(n) = e.name() {
             if n.value() == name {
                 return e.value().as_integer().map(|i| i as i64);
+            }
+        }
+    }
+    None
+}
+
+/// Read a boolean attribute. Tolerant: accepts native KDL bool
+/// (`pulse=#true`), the string forms (`pulse="true"` / `pulse="false"`),
+/// or integers (`pulse=1` / `pulse=0`). KDL v2 requires the `#`
+/// prefix for native booleans, which reads awkwardly in scene files
+/// — so the string form is the recommended user-facing syntax.
+fn attr_bool(node: &KdlNode, name: &str) -> Option<bool> {
+    for e in node.entries() {
+        if let Some(n) = e.name() {
+            if n.value() == name {
+                if let Some(b) = e.value().as_bool() {
+                    return Some(b);
+                }
+                if let Some(s) = e.value().as_string() {
+                    return match s.trim().to_ascii_lowercase().as_str() {
+                        "true" | "yes" | "on" | "1" => Some(true),
+                        "false" | "no" | "off" | "0" => Some(false),
+                        _ => None,
+                    };
+                }
+                if let Some(i) = e.value().as_integer() {
+                    return Some(i != 0);
+                }
             }
         }
     }
@@ -630,5 +732,65 @@ scene {
     fn unknown_top_level_errors() {
         let src = "wat { x 1; }";
         assert!(parse(src).is_err());
+    }
+
+    #[test]
+    fn pulse_attribute_produces_animation() {
+        use crate::animation::{AnimCurve, AnimProperty, LoopMode};
+        let src = r#"scene {
+    bar z=0 x=0 y=0 width="100%" height=10 value="$value" min=0 max=100 pulse="true" pulse-rate="2Hz" pulse-depth="50%"
+}"#;
+        let t = parse(src).unwrap();
+        let anims = &t.scene.elements[0].common().animations;
+        assert_eq!(anims.len(), 1);
+        let a = &anims[0];
+        assert!(matches!(a.target, AnimProperty::Alpha));
+        assert!(matches!(a.curve, AnimCurve::SineInOut));
+        assert!(matches!(a.loop_mode, LoopMode::PingPong));
+        assert!((a.from - 0.5).abs() < 0.01);
+        assert!((a.to - 1.0).abs() < 0.01);
+        // 2Hz → half-period 250ms.
+        assert_eq!(a.duration.as_millis(), 250);
+    }
+
+    #[test]
+    fn pulse_defaults() {
+        let src = r##"scene {
+    rect z=0 x=0 y=0 width=10 height=10 fill="#ff0000" pulse="true"
+}"##;
+        let t = parse(src).unwrap();
+        let anims = &t.scene.elements[0].common().animations;
+        assert_eq!(anims.len(), 1);
+        // Default rate 1Hz → half-period 500ms.
+        assert_eq!(anims[0].duration.as_millis(), 500);
+        // Default depth 40% → from 0.6, to 1.0.
+        assert!((anims[0].from - 0.6).abs() < 0.01);
+    }
+
+    #[test]
+    fn no_pulse_means_no_animations() {
+        let src = r##"scene {
+    rect z=0 x=0 y=0 width=10 height=10 fill="#ff0000"
+}"##;
+        let t = parse(src).unwrap();
+        assert!(t.scene.elements[0].common().animations.is_empty());
+    }
+
+    #[test]
+    fn frequency_parsing() {
+        assert!((parse_frequency_hz("1Hz").unwrap() - 1.0).abs() < 0.001);
+        assert!((parse_frequency_hz("2.5Hz").unwrap() - 2.5).abs() < 0.001);
+        assert!((parse_frequency_hz("500mHz").unwrap() - 0.5).abs() < 0.001);
+        assert!((parse_frequency_hz("0.5").unwrap() - 0.5).abs() < 0.001);
+        assert_eq!(parse_frequency_hz("not-a-frequency"), None);
+    }
+
+    #[test]
+    fn unit_fraction_parsing() {
+        assert!((parse_unit_fraction("40%").unwrap() - 0.4).abs() < 0.001);
+        assert!((parse_unit_fraction("100%").unwrap() - 1.0).abs() < 0.001);
+        assert!((parse_unit_fraction("0.4").unwrap() - 0.4).abs() < 0.001);
+        // Out-of-range values clamp.
+        assert!((parse_unit_fraction("150%").unwrap() - 1.0).abs() < 0.001);
     }
 }
