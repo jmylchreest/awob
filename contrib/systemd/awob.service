@@ -31,6 +31,14 @@ ConditionEnvironment=WAYLAND_DISPLAY
 
 [Service]
 Type=simple
+# Defensive cleanup — if a previous instance was SIGKILL'd or the
+# system was hard-rebooted, the socket file lingers and the next
+# bind() fails with EADDRINUSE. The leading `-` makes the failure
+# tolerated (no socket present is fine). The daemon also unlinks
+# stale sockets internally, but the in-process cleanup needs write
+# access to the runtime dir (granted by the broader ReadWritePaths
+# below) — this ExecStartPre is the belt to that braces.
+ExecStartPre=-/usr/bin/rm -f %t/awob.sock
 ExecStart=%h/.cargo/bin/awob-daemon
 Restart=on-failure
 RestartSec=2
@@ -45,7 +53,10 @@ NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=read-only
 PrivateTmp=yes
-ReadWritePaths=%t/awob.sock
+# Grant write access to the runtime dir, not just the socket file.
+# Unlinking + rebinding the socket needs write+exec on the parent
+# directory, which `%t/awob.sock` (file-only) doesn't grant.
+ReadWritePaths=%t/
 PrivateDevices=no       # backlight listener reads /sys/class/backlight
 ProtectKernelTunables=yes
 ProtectKernelLogs=yes

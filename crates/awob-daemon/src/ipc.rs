@@ -17,6 +17,22 @@ use awob_protocol::{DEFAULT_SOCKET_NAME, Request, Response};
 pub enum IpcError {
     #[error("XDG_RUNTIME_DIR is not set")]
     NoRuntimeDir,
+    #[error("another awob-daemon is already listening on {path}")]
+    AlreadyRunning { path: PathBuf },
+    #[error(
+        "stale socket at {path} couldn't be removed ({source}); check the parent directory's write permissions (systemd unit `ReadWritePaths=` / `RuntimeDirectory=`)"
+    )]
+    StaleSocketUnlink {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("failed to bind IPC socket {path}: {source}")]
+    Bind {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
 }
@@ -33,13 +49,42 @@ pub struct Server {
 
 impl Server {
     pub fn bind(path: PathBuf) -> Result<Self, IpcError> {
+        // Reuse-the-socket dance. If a file exists at the bind path we have
+        // to figure out whether it's a *live* daemon (someone's actually
+        // accept()-ing on the other end — we should bail) or a *stale*
+        // file left behind by a previous instance that died without
+        // cleanup (we should unlink and rebind). The probe is a connect();
+        // success means live. Only errors we treat as stale are
+        // ConnectionRefused (no one accept()ing) and NotFound (file gone
+        // between exists() and connect()).
         if path.exists() {
-            let _ = std::fs::remove_file(&path);
+            match UnixStream::connect(&path) {
+                Ok(_) => return Err(IpcError::AlreadyRunning { path }),
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        std::io::ErrorKind::ConnectionRefused | std::io::ErrorKind::NotFound
+                    ) =>
+                {
+                    if let Err(unlink_err) = std::fs::remove_file(&path) {
+                        return Err(IpcError::StaleSocketUnlink {
+                            path,
+                            source: unlink_err,
+                        });
+                    }
+                }
+                Err(e) => {
+                    return Err(IpcError::Bind { path, source: e });
+                }
+            }
         }
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let listener = UnixListener::bind(&path)?;
+        let listener = UnixListener::bind(&path).map_err(|e| IpcError::Bind {
+            path: path.clone(),
+            source: e,
+        })?;
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700))?;
         Ok(Self { listener, path })
     }
