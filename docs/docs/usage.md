@@ -155,24 +155,16 @@ restart = "always"                            # always | on-failure | never
 
 With `[supervisor] auto = true` (the default), the daemon walks an
 internal `KNOWN_LISTENERS` registry on startup and spawns any whose
-binary is present. The registry today:
+binary is present. See the [Listeners reference](/listeners) for the
+full registry table, per-listener flags, and behaviour notes.
 
-| Name | Binary |
-|---|---|
-| `pipewire` | `awob-listener-pipewire` |
-| `battery` | `awob-listener-battery` |
-| `backlight` | `awob-listener-backlight` |
-| `keyboard-backlight` | `awob-listener-keyboard-backlight` |
+Quick overrides:
 
-Listeners that need arguments (e.g. `awob-listener-wob`'s `--fifo`)
-are deliberately *not* in the registry — add them via `[[listeners]]`.
-
-Lookup order: the directory containing `awob-daemon`, then `$PATH`.
-Dev workflows that run from `target/release` therefore find sibling
-listener binaries automatically.
-
-To disable a single auto entry: `disable = ["pipewire"]`. To skip
-auto-discovery entirely: `auto = false`.
+* `disable = ["pipewire"]` — skip a single auto entry.
+* `auto = false` — skip auto-discovery entirely.
+* `[[listeners]] name = "battery"` — explicit entry with the same
+  name as an auto one wins. Use this to pass non-default flags
+  (e.g. `--alert-bands all` on the battery listener).
 
 ## Preempt semantics
 
