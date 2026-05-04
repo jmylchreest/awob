@@ -18,7 +18,7 @@ placeholder URL below with that one and commit. The video will then
 render inline as a player on the GitHub repo page.
 -->
 
-https://github.com/user-attachments/assets/REPLACE-ME-WITH-DRAG-DROP-UPLOAD.mp4
+https://github.com/user-attachments/assets/c8455de5-f147-44d3-a8f9-01da59708e82
 
 * Single binary per process (daemon, CLI, each listener) — install only what
   you need.
