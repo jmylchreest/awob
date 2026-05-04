@@ -146,8 +146,11 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!("device={device_name} source={source} label={label:?}");
 
     let max = read_u32(&max_path).unwrap_or(100) as f64;
+    // Seed `last` from the current brightness without firing an OSD.
+    // Listeners stay silent on startup (and supervisor respawn) — an
+    // OSD only ever surfaces on a *change* against this baseline. Same
+    // policy as awob-listener-battery.
     let initial = read_u32(&brightness_path).unwrap_or(0) as f64;
-    let _ = send_to_daemon(&cli.socket, &source, &device_name, &label, initial, max);
 
     // Source 1 — inotify on the sysfs file. Cheap, wakes the loop on
     // userspace writes (brightnessctl etc).
