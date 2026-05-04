@@ -17,7 +17,11 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 awob-client.workspace = true
 clap = { version = "4", default-features = false, features = ["derive", "std"] }
+# `notify` covers the userspace-write hot path (brightnessctl etc).
 notify = "6"
+# `udev` covers drivers that emit KOBJ_CHANGE on backlight state updates.
+udev = "0.9"
+nix = { version = "0.29", features = ["poll"] }
 # wayland-client is the only native dep we need to query `wl_output` for the
 # real make/model of the monitor this backlight controls. We don't need
 # SCTK's higher-level abstractions — a one-shot probe at startup is plenty.

@@ -1,15 +1,26 @@
 //! awob backlight listener.
 //!
 //! Watches a sysfs backlight node (`/sys/class/backlight/<dev>/brightness`)
-//! via `notify` and emits an OSD event on every change. Auto-discovers a
-//! backlight device by scanning `/sys/class/backlight` if `--device` isn't
+//! via three additive wake sources — inotify + udev + adaptive sysfs
+//! polling — all feeding one mpsc channel. Auto-discovers a backlight
+//! device by scanning `/sys/class/backlight` if `--device` isn't
 //! passed.
 //!
-//! Reads `max_brightness` from the same directory and forwards it as the
-//! send's `max`, so themes that show absolute values can do so faithfully.
+//! Mirrors `awob-listener-keyboard-backlight`. Display backlights are
+//! almost always changed via userspace `write()` (brightnessctl etc),
+//! so inotify is the hot path; udev + polling cover the rare path
+//! where firmware writes the cached sysfs value without firing
+//! `kernfs_notify()` (no machine has been observed doing this for the
+//! display backlight, but the kbd-backlight half taught us not to
+//! assume).
+//!
+//! Reads `max_brightness` from the same directory and forwards it as
+//! the send's `max`, so themes that show absolute values can do so
+//! faithfully.
 
 mod wayland_outputs;
 
+use std::os::fd::AsFd;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::mpsc;
@@ -17,6 +28,7 @@ use std::time::Duration;
 
 use awob_client::{Client, Send};
 use clap::Parser;
+use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
 use notify::{Event, EventKind, RecursiveMode, Watcher};
 
 #[derive(Parser, Debug)]
@@ -158,21 +170,36 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     // policy as awob-listener-battery and -keyboard-backlight.
     let initial = read_u32(&brightness_path).unwrap_or(0) as f64;
 
+    // Source 1 — inotify on the sysfs file. Cheap, wakes the loop on
+    // userspace writes (brightnessctl etc).
     let (tx, rx) = mpsc::channel::<()>();
+    let inotify_tx = tx.clone();
     let mut watcher = notify::recommended_watcher(move |res: notify::Result<Event>| {
-        if let Ok(ev) = res {
-            if matches!(ev.kind, EventKind::Modify(_) | EventKind::Create(_)) {
-                let _ = tx.send(());
-            }
+        if let Ok(ev) = res
+            && matches!(ev.kind, EventKind::Modify(_) | EventKind::Create(_))
+        {
+            let _ = inotify_tx.send(());
         }
     })?;
     watcher.watch(&brightness_path, RecursiveMode::NonRecursive)?;
 
-    // Poll backstop for hardware where neither the inotify-via-write
-    // nor any udev kobject_uevent path fires. Most display backlights
-    // are driven by userspace tools (brightnessctl etc) which fire
-    // inotify reliably — for those, the recv_timeout almost never
-    // expires.
+    // Source 2 — udev `change` events on the backlight subsystem,
+    // filtered to our device. Catches drivers that fire
+    // `kobject_uevent()` without writing the sysfs file from userspace.
+    let want_device = device_name.clone();
+    let udev_tx = tx.clone();
+    std::thread::Builder::new()
+        .name("udev-backlight".into())
+        .spawn(move || {
+            if let Err(e) = run_udev(&want_device, udev_tx) {
+                tracing::debug!("udev monitor exited: {e}");
+            }
+        })?;
+
+    // Source 3 — polling fall-through, expressed as the recv_timeout
+    // below. Backstop for hardware where neither inotify nor udev
+    // fires (rare for display backlights — most are driven by
+    // userspace tools that always fire inotify).
     let poll_interval = Duration::from_millis(cli.poll_interval);
 
     let mut last = initial;
@@ -197,6 +224,30 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         let _ = send_to_daemon(&cli.socket, &source, &device_name, &label, current, max);
     }
     Ok(())
+}
+
+/// Subscribe to udev `change` events on the `backlight` subsystem and
+/// forward each one matching our device into the wake channel.
+/// Returns when the channel is dropped (main loop exited) or on a
+/// fatal udev error.
+fn run_udev(want_device: &str, tx: mpsc::Sender<()>) -> Result<(), Box<dyn std::error::Error>> {
+    let monitor = udev::MonitorBuilder::new()?
+        .match_subsystem("backlight")?
+        .listen()?;
+    let monitor_fd = monitor.as_fd();
+    loop {
+        let mut pfds = [PollFd::new(monitor_fd, PollFlags::POLLIN)];
+        match poll(&mut pfds, PollTimeout::NONE) {
+            Ok(_) => {}
+            Err(nix::errno::Errno::EINTR) => continue,
+            Err(e) => return Err(format!("poll: {e}").into()),
+        }
+        for ev in monitor.iter() {
+            if ev.sysname().to_string_lossy() == want_device && tx.send(()).is_err() {
+                return Ok(());
+            }
+        }
+    }
 }
 
 /// Read the connector name from the backlight's `device` symlink.
