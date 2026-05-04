@@ -394,6 +394,24 @@ mod tests {
         let r = base64_decode("aGVsbG8=").unwrap();
         assert_eq!(r, b"hello");
     }
+
+    #[test]
+    fn b64_decode_rejects_non_multiple_of_four() {
+        // Non-multiple-of-4 lengths must error before the chunk loop
+        // so we never index past the buffer.
+        for s in ["a", "ab", "abc", "abcde"] {
+            assert!(
+                base64_decode(s).is_err(),
+                "expected err for len={}",
+                s.len()
+            );
+        }
+    }
+
+    #[test]
+    fn b64_decode_empty_ok() {
+        assert_eq!(base64_decode("").unwrap(), Vec::<u8>::new());
+    }
     #[test]
     fn rasterize_simple_svg() {
         let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32"><rect width="32" height="32" fill="red"/></svg>"#;
