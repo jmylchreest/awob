@@ -47,13 +47,12 @@ struct Cli {
     #[arg(long)]
     label: Option<String>,
 
-    /// Minimum polling interval in milliseconds for the sysfs brightness
+    /// Polling interval in milliseconds for the sysfs brightness
     /// re-read. inotify covers most display backlights (because every
     /// brightness change is a userspace write — brightnessctl etc),
     /// but on hardware where the firmware updates sysfs directly the
-    /// poll is the only signal. Adaptive backoff: starts at this
-    /// interval, doubles up to 1000 ms after several quiet polls, then
-    /// resets to the minimum on any wake or change.
+    /// poll is the only signal. This is the worst-case OSD latency on
+    /// such hardware.
     #[arg(long, default_value_t = 250, value_parser = clap::value_parser!(u64).range(100..=2000))]
     poll_interval: u64,
 }
@@ -129,51 +128,33 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     })?;
     watcher.watch(&brightness_path, RecursiveMode::NonRecursive)?;
 
-    // Adaptive polling: poll at `--poll-interval` (default 250 ms)
-    // when active, double the interval after BACKOFF_AFTER consecutive
-    // quiet polls (capped at POLL_MAX = 1 s), reset on any wake or
-    // change. On display backlights this is mostly belt-and-braces:
-    // inotify fires reliably for userspace-write paths
-    // (brightnessctl), so polling rarely matters. But on hardware
-    // where the firmware writes sysfs directly without firing
-    // kernfs_notify, the poll is the only signal we'd ever see.
-    const POLL_MAX: Duration = Duration::from_millis(1000);
-    const BACKOFF_AFTER: u32 = 8;
-
-    let min_poll = Duration::from_millis(cli.poll_interval);
-    let max_poll = POLL_MAX.max(min_poll);
-    let mut current_poll = min_poll;
-    let mut quiet_count: u32 = 0;
+    // Poll backstop for hardware where neither the inotify-via-write
+    // nor any udev kobject_uevent path fires. Most display backlights
+    // are driven by userspace tools (brightnessctl etc) which fire
+    // inotify reliably — for those, the recv_timeout almost never
+    // expires.
+    let poll_interval = Duration::from_millis(cli.poll_interval);
 
     let mut last = initial;
     let debounce = Duration::from_millis(40);
     loop {
-        let woken = match rx.recv_timeout(current_poll) {
+        match rx.recv_timeout(poll_interval) {
             Ok(()) => {
                 // Debounce a burst (sysfs can fire several events per change).
                 std::thread::sleep(debounce);
                 while rx.try_recv().is_ok() {}
-                true
             }
-            Err(mpsc::RecvTimeoutError::Timeout) => false,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                // No wake; polling path.
+            }
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
-        };
+        }
         let current = read_u32(&brightness_path).unwrap_or(last as u32) as f64;
-        let changed = (current - last).abs() >= f64::EPSILON;
-        if changed {
-            last = current;
-            let _ = send_to_daemon(&cli.socket, &source, &device_name, &label, current, max);
+        if (current - last).abs() < f64::EPSILON {
+            continue;
         }
-        if woken || changed {
-            current_poll = min_poll;
-            quiet_count = 0;
-        } else {
-            quiet_count += 1;
-            if quiet_count >= BACKOFF_AFTER {
-                current_poll = (current_poll * 2).min(max_poll);
-                quiet_count = 0;
-            }
-        }
+        last = current;
+        let _ = send_to_daemon(&cli.socket, &source, &device_name, &label, current, max);
     }
     Ok(())
 }

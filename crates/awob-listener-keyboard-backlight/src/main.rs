@@ -73,14 +73,11 @@ struct Cli {
     #[arg(long)]
     label: Option<String>,
 
-    /// Minimum polling interval in milliseconds for the sysfs brightness
-    /// re-read. This is the *fastest* cadence — when the listener is
-    /// "active" (recently seen a change or notification), it polls at
-    /// this interval. After several consecutive polls find no change,
-    /// the cadence halves repeatedly until it caps at 1000 ms (so the
-    /// worst-case OSD latency after a long idle is one second). Any
-    /// inotify / udev wake or detected change resets back to the
-    /// minimum.
+    /// Polling interval in milliseconds for the sysfs brightness
+    /// re-read. This is the worst-case OSD latency on hardware where
+    /// neither inotify nor udev fires (e.g. Framework chromeos EC).
+    /// On hardware where they do fire, polling rarely matters —
+    /// every wake is external.
     #[arg(long, default_value_t = 250, value_parser = clap::value_parser!(u64).range(100..=2000))]
     poll_interval: u64,
 }
@@ -190,55 +187,32 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             }
         })?;
 
-    // Source 3 — adaptive polling fall-through, expressed as the
-    // recv_timeout below. Backstop for drivers that update the cached
-    // sysfs value without firing either of the above (Framework
-    // laptops with the chromeos EC are the canonical case).
-    //
-    // Adaptive backoff: poll at `--poll-interval` (default 250 ms) when
-    // active, then double the interval after each window of
-    // `BACKOFF_AFTER` consecutive timeouts with no change, capping at
-    // POLL_MAX (1 s). Any external wake or detected change resets to
-    // the minimum. Net effect on Framework while idle: ~1 sysfs read
-    // per second; while active: 4 reads per second. Worst-case OSD
-    // latency after a long idle: 1 s.
-    const POLL_MAX: Duration = Duration::from_millis(1000);
-    const BACKOFF_AFTER: u32 = 8;
-
-    let min_poll = Duration::from_millis(cli.poll_interval);
-    let max_poll = POLL_MAX.max(min_poll); // backoff is a no-op if user set min above max
-    let mut current_poll = min_poll;
-    let mut quiet_count: u32 = 0;
+    // Source 3 — polling fall-through, expressed as the recv_timeout
+    // below. Backstop for drivers that update the cached sysfs value
+    // without firing either inotify or udev (Framework laptops with
+    // the chromeos EC are the canonical case).
+    let poll_interval = Duration::from_millis(cli.poll_interval);
 
     let mut last = initial;
     let debounce = Duration::from_millis(40);
     loop {
-        let woken = match rx.recv_timeout(current_poll) {
+        match rx.recv_timeout(poll_interval) {
             Ok(()) => {
                 // Some source fired — coalesce a burst before re-reading.
                 std::thread::sleep(debounce);
                 while rx.try_recv().is_ok() {}
-                true
             }
-            Err(mpsc::RecvTimeoutError::Timeout) => false,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                // No wake; polling path.
+            }
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
-        };
+        }
         let current = read_u32(&brightness_path).unwrap_or(last as u32) as f64;
-        let changed = (current - last).abs() >= f64::EPSILON;
-        if changed {
-            last = current;
-            let _ = send_to_daemon(&cli.socket, &source, &device_name, &label, current, max);
+        if (current - last).abs() < f64::EPSILON {
+            continue;
         }
-        if woken || changed {
-            current_poll = min_poll;
-            quiet_count = 0;
-        } else {
-            quiet_count += 1;
-            if quiet_count >= BACKOFF_AFTER {
-                current_poll = (current_poll * 2).min(max_poll);
-                quiet_count = 0;
-            }
-        }
+        last = current;
+        let _ = send_to_daemon(&cli.socket, &source, &device_name, &label, current, max);
     }
     Ok(())
 }
