@@ -21,6 +21,7 @@ use std::process::ExitCode;
 use std::sync::mpsc;
 use std::time::Duration;
 
+use awob_client::listener::{ChangeFilter, wait_for_resource};
 use awob_client::{Client, Send};
 use clap::Parser;
 use notify::{Event, EventKind, RecursiveMode, Watcher};
@@ -58,25 +59,14 @@ struct Cli {
 /// thing for ACPI firmware, but the loop keeps shape consistent
 /// with the other listeners.
 fn wait_for_attribute() -> PathBuf {
-    let path = PathBuf::from(PROFILE_PATH);
-    if path.exists() {
-        return path;
-    }
-    tracing::info!(
-        "no platform_profile under {PROFILE_PATH}; will rescan every {}s",
-        NO_DEVICE_RESCAN.as_secs()
-    );
-    loop {
-        std::thread::sleep(NO_DEVICE_RESCAN);
-        if path.exists() {
-            tracing::info!("platform_profile appeared; resuming");
-            return path;
-        }
-        tracing::debug!(
-            "still no platform_profile; rescanning in {}s",
-            NO_DEVICE_RESCAN.as_secs()
-        );
-    }
+    wait_for_resource(
+        || {
+            let p = PathBuf::from(PROFILE_PATH);
+            p.exists().then_some(p)
+        },
+        "platform_profile",
+        NO_DEVICE_RESCAN,
+    )
 }
 
 fn read_profile(path: &Path) -> Option<String> {
@@ -145,10 +135,6 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         path.display()
     );
 
-    // Seed `last` from the current profile without firing — listeners
-    // stay silent on startup and supervisor respawn.
-    let initial = read_profile(&path).unwrap_or_default();
-
     // inotify on the attribute. Wakes the loop on writes from PPD,
     // tuned, the user echoing into it, ACPI hotkeys handled in
     // userspace, etc.
@@ -164,7 +150,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     watcher.watch(&path, RecursiveMode::NonRecursive)?;
 
     let poll_interval = Duration::from_millis(cli.poll_interval);
-    let mut last = initial;
+    let mut filter: ChangeFilter<(), String> = ChangeFilter::new();
     let debounce = Duration::from_millis(40);
     loop {
         match rx.recv_timeout(poll_interval) {
@@ -176,11 +162,12 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
         }
         let current = read_profile(&path).unwrap_or_default();
-        if current == last || current.is_empty() {
+        if current.is_empty() {
             continue;
         }
-        last = current.clone();
-        if let Err(e) = fire(&cli.socket, &current) {
+        if filter.changed((), &current)
+            && let Err(e) = fire(&cli.socket, &current)
+        {
             tracing::info!("send: {e}");
         }
     }

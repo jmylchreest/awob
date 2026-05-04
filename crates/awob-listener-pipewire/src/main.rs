@@ -26,6 +26,7 @@ use std::process::ExitCode;
 use std::rc::Rc;
 use std::sync::mpsc;
 
+use awob_client::listener::ChangeFilter;
 use awob_client::{Client, Send};
 use clap::Parser;
 use pipewire as pw;
@@ -452,7 +453,8 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     // (so the param closure can attach it to outgoing events).
     type NodeBinding = (pw::node::Node, pw::node::NodeListener);
     let bound_nodes: Rc<RefCell<HashMap<u32, NodeBinding>>> = Rc::new(RefCell::new(HashMap::new()));
-    let last_state: Rc<RefCell<HashMap<u32, AudioState>>> = Rc::new(RefCell::new(HashMap::new()));
+    let last_state: Rc<RefCell<ChangeFilter<u32, AudioState>>> =
+        Rc::new(RefCell::new(ChangeFilter::new()));
 
     // The `default` Metadata object. Bound on first sight so we can
     // observe `default.audio.sink` / `default.audio.source` updates
@@ -612,22 +614,13 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                                 return;
                             }
                         }
-                        // First observation of this node: silently seed
-                        // `last` and return. Same policy as the rest of
-                        // awob's listeners (see aide decision
-                        // `awob-listener-startup-silent`). PipeWire's
-                        // `Props` param is emitted synchronously when
-                        // we subscribe, so without this check every
-                        // sink/source would fire an OSD on daemon
-                        // start. The user wants OSDs only on real
-                        // changes, not on bookkeeping observations.
-                        let mut last = last_state_for_param.borrow_mut();
-                        let prev = last.insert(id, state);
-                        let real_change = match prev {
-                            Some(p) => p != state,
-                            None => false,
-                        };
-                        if real_change {
+                        // First observation of this node is silently
+                        // seeded by ChangeFilter (PipeWire emits Props
+                        // synchronously on subscribe, so without this
+                        // every sink/source would fire an OSD on
+                        // daemon start). See aide decision
+                        // `awob-listener-startup-silent`.
+                        if last_state_for_param.borrow_mut().changed(id, &state) {
                             let _ = tx_local.send(VolumeEvent {
                                 channel,
                                 kind,
@@ -649,7 +642,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             let bound_meta = Rc::clone(&bound_metadata);
             move |id| {
                 bound.borrow_mut().remove(&id);
-                last.borrow_mut().remove(&id);
+                last.borrow_mut().forget(&id);
                 bound_meta.borrow_mut().remove(&id);
             }
         })

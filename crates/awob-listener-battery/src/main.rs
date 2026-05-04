@@ -23,6 +23,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
+use awob_client::listener::wait_for_resource;
 use awob_client::{Client, Send};
 use clap::Parser;
 use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
@@ -204,26 +205,14 @@ const NO_DEVICE_RESCAN: Duration = Duration::from_secs(60);
 /// journal without spamming on every retry. Subsequent quiet retries
 /// stay at DEBUG.
 fn wait_for_batteries() -> Vec<PathBuf> {
-    let bs = discover_batteries();
-    if !bs.is_empty() {
-        return bs;
-    }
-    tracing::info!(
-        "no batteries under {SYSFS_ROOT} (type=Battery); will rescan every {}s for hot-plug",
-        NO_DEVICE_RESCAN.as_secs()
-    );
-    loop {
-        std::thread::sleep(NO_DEVICE_RESCAN);
-        let bs = discover_batteries();
-        if !bs.is_empty() {
-            tracing::info!("battery appeared; resuming");
-            return bs;
-        }
-        tracing::debug!(
-            "still no batteries; rescanning in {}s",
-            NO_DEVICE_RESCAN.as_secs()
-        );
-    }
+    wait_for_resource(
+        || {
+            let bs = discover_batteries();
+            (!bs.is_empty()).then_some(bs)
+        },
+        "battery",
+        NO_DEVICE_RESCAN,
+    )
 }
 
 /// Return every `power_supply` device of `type=Battery` on this system.

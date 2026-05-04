@@ -13,6 +13,8 @@ use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+pub mod listener;
+
 pub use awob_protocol::{HistoryEntry, PROTOCOL_VERSION, Request, Response, SendPayload};
 
 /// Set up the workspace-wide tracing subscriber. Idempotent —

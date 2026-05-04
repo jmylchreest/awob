@@ -107,23 +107,33 @@ could grow a `--default-only` flag that:
 Already done — listener is fully event-driven via pipewire-rs subscription.
 This entry retired.
 
-## Migrate display backlight listener to additive monitor
+## Extract `AdditiveMonitor` into `awob-client::listener`
 
-`awob-listener-keyboard-backlight` already runs the additive monitor
-pattern: inotify + udev + adaptive sysfs polling, all feeding one
-mpsc wake channel. It was needed because Framework laptops with the
-chromeos EC update sysfs without firing either inotify or udev.
+`ChangeFilter` and `wait_for_resource` now live in
+`awob-client::listener` and are shared across every in-tree listener.
+The third reusable shape — the **additive monitor** (inotify + udev +
+poll → one mpsc) — is still copy-pasted between
+`awob-listener-backlight` and `awob-listener-keyboard-backlight`
+(~80 LOC each).
 
-`awob-listener-backlight` (display) still only watches inotify on the
-brightness file. That's adequate today on every machine seen — every
-display backlight is changed via a userspace `write()` (brightnessctl
-etc) which fires inotify. But there's no architectural reason it
-shouldn't follow the same additive-monitor pattern, and a future
-firmware-driven display-brightness path (rare but possible) would
-silently miss events the same way kbd-backlight did on Framework.
+Two consumers don't justify the abstraction yet. The natural third
+consumer is the proposed `awob-listener-kbd-state` listener
+(CapsLock / NumLock / ScrollLock LEDs under `/sys/class/leds`,
+identical inotify+udev+poll shape). When that lands — or any other
+listener that needs the same primitive — extract:
 
-Cost: ~80 LOC porting the keyboard-backlight pattern. Defer until
-someone reports a real case.
+```rust
+// awob-client::listener::AdditiveMonitor
+pub struct AdditiveMonitor { rx: mpsc::Receiver<()>, poll: Duration }
+impl AdditiveMonitor {
+    pub fn for_sysfs(path: &Path, subsystem: &str, sysname: &str,
+                     poll: Duration) -> Result<Self> { … }
+    pub fn next_wake(&self) -> WakeReason { … }
+}
+```
+
+Net: ~−160 LOC across the two backlight listeners + ~+100 in the
+helper. Defer until a third consumer materialises.
 
 
 ## Bluetooth peripheral batteries (`awob-listener-bluetooth`)

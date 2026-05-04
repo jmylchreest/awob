@@ -30,6 +30,7 @@ use std::process::ExitCode;
 use std::sync::mpsc;
 use std::time::Duration;
 
+use awob_client::listener::{ChangeFilter, wait_for_resource};
 use awob_client::{Client, Send};
 use clap::Parser;
 use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
@@ -140,36 +141,17 @@ const NO_DEVICE_RESCAN: Duration = Duration::from_secs(60);
 /// name (or via auto-discovery). Logs the "no device" state once at
 /// INFO and subsequent quiet retries at DEBUG.
 fn wait_for_device(explicit: Option<&str>) -> PathBuf {
-    let resolve = || match explicit {
-        Some(name) => {
-            let p = Path::new("/sys/class/leds").join(name);
-            if p.join("brightness").exists() {
-                Some(p)
-            } else {
-                None
+    wait_for_resource(
+        || match explicit {
+            Some(name) => {
+                let p = Path::new("/sys/class/leds").join(name);
+                p.join("brightness").exists().then_some(p)
             }
-        }
-        None => discover_device(),
-    };
-    if let Some(p) = resolve() {
-        return p;
-    }
-    tracing::info!(
-        "no keyboard backlight device found under /sys/class/leds (looked for *kbd*/*keyboard*); \
-         will rescan every {}s for hot-plug",
-        NO_DEVICE_RESCAN.as_secs()
-    );
-    loop {
-        std::thread::sleep(NO_DEVICE_RESCAN);
-        if let Some(p) = resolve() {
-            tracing::info!("keyboard backlight appeared at {}; resuming", p.display());
-            return p;
-        }
-        tracing::debug!(
-            "still no keyboard backlight; rescanning in {}s",
-            NO_DEVICE_RESCAN.as_secs()
-        );
-    }
+            None => discover_device(),
+        },
+        "keyboard-backlight",
+        NO_DEVICE_RESCAN,
+    )
 }
 
 fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
@@ -192,11 +174,6 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!("device={device_name} source={source} label={label:?}");
 
     let max = read_u32(&max_path).unwrap_or(100) as f64;
-    // Seed `last` from the current brightness without firing an OSD.
-    // Listeners stay silent on startup (and supervisor respawn) — an
-    // OSD only ever surfaces on a *change* against this baseline. Same
-    // policy as awob-listener-battery.
-    let initial = read_u32(&brightness_path).unwrap_or(0) as f64;
 
     // Source 1 — inotify on the sysfs file. Cheap, wakes the loop on
     // userspace writes (brightnessctl etc).
@@ -231,7 +208,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     // the chromeos EC are the canonical case).
     let poll_interval = Duration::from_millis(cli.poll_interval);
 
-    let mut last = initial;
+    let mut filter: ChangeFilter<(), u32> = ChangeFilter::new();
     let debounce = Duration::from_millis(40);
     loop {
         match rx.recv_timeout(poll_interval) {
@@ -245,12 +222,17 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
         }
-        let current = read_u32(&brightness_path).unwrap_or(last as u32) as f64;
-        if (current - last).abs() < f64::EPSILON {
-            continue;
+        let current = read_u32(&brightness_path).unwrap_or(0);
+        if filter.changed((), &current) {
+            let _ = send_to_daemon(
+                &cli.socket,
+                &source,
+                &device_name,
+                &label,
+                current as f64,
+                max,
+            );
         }
-        last = current;
-        let _ = send_to_daemon(&cli.socket, &source, &device_name, &label, current, max);
     }
     Ok(())
 }
