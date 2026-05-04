@@ -15,5 +15,6 @@ bash "$HERE/icons.sh"
 bash "$HERE/styles.sh"
 bash "$HERE/console.sh"
 bash "$HERE/themes.sh"
+bash "$HERE/animations.sh"
 
 printf '\n=== ALL DEMOS COMPLETE ===\n'
