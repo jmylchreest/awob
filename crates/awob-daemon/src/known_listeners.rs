@@ -30,6 +30,10 @@ pub const KNOWN_LISTENERS: &[KnownListener] = &[
         name: "keyboard-backlight",
         binary: "awob-listener-keyboard-backlight",
     },
+    KnownListener {
+        name: "power-profile",
+        binary: "awob-listener-power-profile",
+    },
 ];
 
 /// Resolve `binary_name` to an executable path. Checks the daemon's own

@@ -225,6 +225,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "awob-listener-power-profile"
+version = "0.1.2"
+dependencies = [
+ "awob-client",
+ "clap",
+ "notify",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "awob-listener-wob"
 version = "0.1.2"
 dependencies = [
