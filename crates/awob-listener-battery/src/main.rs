@@ -79,13 +79,17 @@ struct Cli {
     states: String,
 
     /// Comma-separated list of capacity bands that fire an OSD when
-    /// entered. Recognised band names: `empty` (0–5 %), `caution`
-    /// (6–20 %), `low` (21–50 %), `good` (51–80 %), `full`
-    /// (81–100 %). Special values: `all` (every band fires) and
-    /// `none` (only state transitions fire).
+    /// entered *while discharging*. Recognised band names: `empty`
+    /// (0–5 %), `caution` (6–20 %), `low` (21–50 %), `good` (51–80 %),
+    /// `full` (81–100 %). Special values: `all` (every band fires)
+    /// and `none` (only state transitions fire).
     ///
     /// Default `empty,caution` — drains past the warning bands surface
-    /// an OSD; the rest of a discharge is silent. State transitions
+    /// an OSD; the rest of a discharge is silent.
+    ///
+    /// Band crossings are silent while charging or fully charged —
+    /// bands encode urgency (warn / critical), and urgency is only
+    /// meaningful while the battery is draining. State transitions
     /// (Charging↔Discharging↔FullyCharged) always fire regardless of
     /// this filter — they're the events the user wants to see.
     #[arg(long, default_value = "empty,caution")]
@@ -305,6 +309,28 @@ fn read_battery(dir: &Path) -> Option<BatteryReading> {
     })
 }
 
+/// Re-read every battery in `batteries` from sysfs and write the
+/// fresh readings into `cache`, keyed by the directory's basename
+/// (which matches the kernel's `POWER_SUPPLY_NAME`). Batteries whose
+/// sysfs read fails are skipped, leaving any previous cache entry in
+/// place — better stale than absent for a transient I/O hiccup.
+fn refresh_cache_from_sysfs(
+    cache: &mut std::collections::HashMap<String, BatteryReading>,
+    batteries: &[PathBuf],
+) {
+    for path in batteries {
+        let Some(r) = read_battery(path) else {
+            continue;
+        };
+        let name = path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_string();
+        cache.insert(name, r);
+    }
+}
+
 /// Aggregate every battery into a single (capacity %, dominant state)
 /// pair. With one battery this is a passthrough; with multiple, the
 /// capacity is weighted by full-charge size so a tiny secondary cell
@@ -343,8 +369,8 @@ fn aggregate(readings: &[BatteryReading]) -> Option<(f64, BatteryState)> {
 /// previous bands in order). Bands cascade so the first match wins.
 ///
 /// Band names double as the unit of alert filtering (`--alert-bands`)
-/// and as the OSD style override during discharge — `pick_style`,
-/// `pick_icon`, and `refresh_and_send` all consult the same table.
+/// and as the OSD style override during discharge — `pick_visuals`
+/// and `evaluate_and_emit` both consult the same table.
 struct Band {
     name: &'static str,
     upper: i32,
@@ -405,23 +431,29 @@ fn band_for(pct: i32) -> &'static Band {
         .unwrap_or(BANDS.last().unwrap())
 }
 
-fn pick_icon(pct: f64, state: BatteryState) -> &'static str {
+/// Pick the icon name and style to use for a given (capacity, state).
+///
+/// Visual semantics:
+/// * Charging / FullyCharged → `style=normal` always (no warn/critical
+///   urgency when plugged in), and the band's `icon_charging` variant.
+/// * Otherwise → the band's `style` (`warn` for caution/low, `critical`
+///   for empty, `normal` elsewhere) and the discharging icon.
+///
+/// One call returns both fields so `emit_osd` doesn't double-walk the
+/// band table.
+fn pick_visuals(pct: f64, state: BatteryState) -> (&'static str, &'static str) {
     let band = band_for(pct as i32);
-    if matches!(state, BatteryState::Charging | BatteryState::FullyCharged) {
+    let charging = matches!(state, BatteryState::Charging | BatteryState::FullyCharged);
+    let icon = if charging {
         band.icon_charging
     } else {
         band.icon
-    }
+    };
+    let style = if charging { "normal" } else { band.style };
+    (icon, style)
 }
 
-fn pick_style(pct: f64, state: BatteryState) -> &'static str {
-    if matches!(state, BatteryState::Charging | BatteryState::FullyCharged) {
-        return "normal";
-    }
-    band_for(pct as i32).style
-}
-
-fn fire(
+fn emit_osd(
     socket: &Option<PathBuf>,
     source: &str,
     pct: f64,
@@ -431,8 +463,7 @@ fn fire(
         Some(p) => Client::connect_to(p)?,
         None => Client::connect()?,
     };
-    let icon = pick_icon(pct, state);
-    let style = pick_style(pct, state);
+    let (icon, style) = pick_visuals(pct, state);
     let app = format!("Battery: {}", state.slug());
     let s = Send::new("battery", pct)
         .listener_id(LISTENER_ID)
@@ -484,18 +515,10 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     // driver lags AC plug events.
     let mut burst_until: Option<Instant> = None;
 
-    // Seed the cache from sysfs and fire the initial OSD.
-    for path in &batteries {
-        if let Some(r) = read_battery(path) {
-            let name = path
-                .file_name()
-                .and_then(|s| s.to_str())
-                .unwrap_or("")
-                .to_string();
-            cache.insert(name, r);
-        }
-    }
-    refresh_and_send(
+    // Seed the cache from sysfs and record the baseline (no OSD on
+    // first observation — see `evaluate_and_emit`).
+    refresh_cache_from_sysfs(&mut cache, &batteries);
+    evaluate_and_emit(
         &cache,
         &cli.socket,
         &source,
@@ -550,20 +573,11 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         let need_sysfs_refresh =
             !got_battery_event && (got_event || still_in_burst || due_for_rescan);
         if need_sysfs_refresh {
-            for path in &batteries {
-                if let Some(r) = read_battery(path) {
-                    let name = path
-                        .file_name()
-                        .and_then(|s| s.to_str())
-                        .unwrap_or("")
-                        .to_string();
-                    cache.insert(name, r);
-                }
-            }
+            refresh_cache_from_sysfs(&mut cache, &batteries);
         }
 
         if got_event || still_in_burst || due_for_rescan {
-            refresh_and_send(
+            evaluate_and_emit(
                 &cache,
                 &cli.socket,
                 &source,
@@ -658,10 +672,23 @@ fn parse_alert_bands(arg: &str) -> HashSet<&'static str> {
     out
 }
 
-/// Read every battery, aggregate, and fire an OSD if either:
+/// Decide whether the latest aggregated battery reading deserves an
+/// OSD, and emit one if so.
 ///
-/// * the dominant state changed (Discharging↔Charging↔FullyCharged), or
-/// * capacity entered a new band whose name is in `alert_bands`.
+/// Fires when:
+/// * the dominant state changed (Discharging↔Charging↔FullyCharged↔…), or
+/// * we are **discharging** AND capacity entered a new band whose name
+///   is in `alert_bands`.
+///
+/// Why band crossings only fire while discharging: bands encode
+/// urgency — `caution`, `low`, `empty`. While the battery is plugged
+/// in (Charging, FullyCharged, PendingCharge, PendingDischarge) those
+/// bands are not warnings; surfacing them is just noise. The visual
+/// layer (`pick_visuals`) already collapses the style to `normal`
+/// while charging, so the OSD that *would* fire would carry no
+/// urgency anyway. Skipping it entirely matches what the user expects
+/// from a battery indicator: state transitions are events; band
+/// crossings are warnings, and warnings only matter while draining.
 ///
 /// "Discharging from 87 % to 21 %" is silent unless `low` and/or
 /// `caution` are in `alert_bands` — only band entries we explicitly
@@ -673,7 +700,31 @@ fn parse_alert_bands(arg: &str) -> HashSet<&'static str> {
 /// pipewire / backlight / keyboard-backlight, which only fire on real
 /// changes. Without this the user would see a "discharging at 73 %"
 /// OSD every time the daemon was restarted, which is just noise.
-fn refresh_and_send(
+/// Pure decision: should the (state, band) pair we just observed
+/// trigger an OSD given the previous (state, band) and the user's
+/// `--alert-bands` selection?
+///
+/// Split out from `evaluate_and_emit` so it's testable without a real
+/// socket. See that function's doc-comment for the policy this
+/// implements.
+fn should_fire(
+    prev: Option<(BatteryState, &'static str)>,
+    state: BatteryState,
+    band_name: &'static str,
+    alert_bands: &HashSet<&'static str>,
+) -> bool {
+    let Some((prev_state, prev_band_name)) = prev else {
+        // First observation: silently baseline.
+        return false;
+    };
+    let state_changed = prev_state != state;
+    let band_alert = state == BatteryState::Discharging
+        && band_name != prev_band_name
+        && alert_bands.contains(band_name);
+    state_changed || band_alert
+}
+
+fn evaluate_and_emit(
     cache: &std::collections::HashMap<String, BatteryReading>,
     socket: &Option<PathBuf>,
     source: &str,
@@ -688,20 +739,13 @@ fn refresh_and_send(
     if !state_filter.contains(&state) {
         return;
     }
-    let pct_int = pct.round() as i32;
-    let band = band_for(pct_int);
-    let fire_now = match *last {
-        Some((prev_state, prev_band_name)) => {
-            prev_state != state || (band.name != prev_band_name && alert_bands.contains(band.name))
-        }
-        // First observation: silently record the baseline.
-        None => false,
-    };
+    let band = band_for(pct.round() as i32);
+    let fire_now = should_fire(*last, state, band.name, alert_bands);
     *last = Some((state, band.name));
     if !fire_now {
         return;
     }
-    if let Err(e) = fire(socket, source, pct, state) {
+    if let Err(e) = emit_osd(socket, source, pct, state) {
         tracing::info!("send: {e}");
     }
 }
@@ -726,32 +770,31 @@ fn main() -> ExitCode {
 mod tests {
     use super::*;
 
+    fn icon(pct: f64, s: BatteryState) -> &'static str {
+        pick_visuals(pct, s).0
+    }
+
+    fn style(pct: f64, s: BatteryState) -> &'static str {
+        pick_visuals(pct, s).1
+    }
+
     #[test]
     fn icon_buckets() {
-        assert_eq!(pick_icon(95.0, BatteryState::Discharging), "battery-full");
-        assert_eq!(pick_icon(60.0, BatteryState::Discharging), "battery-good");
-        assert_eq!(
-            pick_icon(20.0, BatteryState::Discharging),
-            "battery-caution"
-        );
-        assert_eq!(pick_icon(5.0, BatteryState::Discharging), "battery-empty");
-        assert_eq!(
-            pick_icon(95.0, BatteryState::Charging),
-            "battery-full-charged"
-        );
-        assert_eq!(
-            pick_icon(60.0, BatteryState::Charging),
-            "battery-good-charging"
-        );
+        assert_eq!(icon(95.0, BatteryState::Discharging), "battery-full");
+        assert_eq!(icon(60.0, BatteryState::Discharging), "battery-good");
+        assert_eq!(icon(20.0, BatteryState::Discharging), "battery-caution");
+        assert_eq!(icon(5.0, BatteryState::Discharging), "battery-empty");
+        assert_eq!(icon(95.0, BatteryState::Charging), "battery-full-charged");
+        assert_eq!(icon(60.0, BatteryState::Charging), "battery-good-charging");
     }
 
     #[test]
     fn style_priorities() {
-        assert_eq!(pick_style(50.0, BatteryState::Charging), "normal");
-        assert_eq!(pick_style(5.0, BatteryState::Charging), "normal");
-        assert_eq!(pick_style(50.0, BatteryState::Discharging), "normal");
-        assert_eq!(pick_style(20.0, BatteryState::Discharging), "warn");
-        assert_eq!(pick_style(5.0, BatteryState::Discharging), "critical");
+        assert_eq!(style(50.0, BatteryState::Charging), "normal");
+        assert_eq!(style(5.0, BatteryState::Charging), "normal");
+        assert_eq!(style(50.0, BatteryState::Discharging), "normal");
+        assert_eq!(style(20.0, BatteryState::Discharging), "warn");
+        assert_eq!(style(5.0, BatteryState::Discharging), "critical");
     }
 
     #[test]
@@ -851,6 +894,96 @@ mod tests {
         );
         assert_eq!(BatteryState::from_sysfs("Empty"), BatteryState::Empty);
         assert_eq!(BatteryState::from_sysfs("nonsense"), BatteryState::Unknown);
+    }
+
+    fn default_alert_bands() -> HashSet<&'static str> {
+        ["empty", "caution"].into_iter().collect()
+    }
+
+    #[test]
+    fn first_observation_is_silent() {
+        // No previous record → never fire, regardless of state/band.
+        let bands = default_alert_bands();
+        assert!(!should_fire(
+            None,
+            BatteryState::Discharging,
+            "empty",
+            &bands
+        ));
+        assert!(!should_fire(None, BatteryState::Charging, "good", &bands));
+    }
+
+    #[test]
+    fn state_transition_always_fires() {
+        let bands = default_alert_bands();
+        let prev = Some((BatteryState::Discharging, "good"));
+        // Discharging → Charging: state change, fire even though band is
+        // unchanged and `good` isn't in alert_bands.
+        assert!(should_fire(prev, BatteryState::Charging, "good", &bands));
+        // Charging → FullyCharged: fire.
+        let prev = Some((BatteryState::Charging, "full"));
+        assert!(should_fire(
+            prev,
+            BatteryState::FullyCharged,
+            "full",
+            &bands
+        ));
+    }
+
+    #[test]
+    fn band_crossing_silent_while_charging() {
+        // The bug we just fixed: charging from 5 % to 6 % crosses
+        // empty → caution, both in default alert_bands. Must NOT fire.
+        let bands = default_alert_bands();
+        let prev = Some((BatteryState::Charging, "empty"));
+        assert!(
+            !should_fire(prev, BatteryState::Charging, "caution", &bands),
+            "band crossings while charging must not fire OSDs"
+        );
+        // Same crossing while FullyCharged / PendingDischarge / etc. is
+        // also silent.
+        let prev = Some((BatteryState::FullyCharged, "good"));
+        assert!(!should_fire(
+            prev,
+            BatteryState::FullyCharged,
+            "full",
+            &bands
+        ));
+    }
+
+    #[test]
+    fn band_crossing_fires_while_discharging_if_in_alerts() {
+        let bands = default_alert_bands();
+        let prev = Some((BatteryState::Discharging, "low"));
+        // low → caution: caution is in default alert_bands, fire.
+        assert!(should_fire(
+            prev,
+            BatteryState::Discharging,
+            "caution",
+            &bands
+        ));
+        // caution → empty: empty is in default alert_bands, fire.
+        let prev = Some((BatteryState::Discharging, "caution"));
+        assert!(should_fire(
+            prev,
+            BatteryState::Discharging,
+            "empty",
+            &bands
+        ));
+    }
+
+    #[test]
+    fn band_crossing_silent_when_band_not_in_alerts() {
+        // Default alert_bands = {empty, caution}. A discharge from
+        // full → good is a band change but neither side is in alerts.
+        let bands = default_alert_bands();
+        let prev = Some((BatteryState::Discharging, "full"));
+        assert!(!should_fire(
+            prev,
+            BatteryState::Discharging,
+            "good",
+            &bands
+        ));
     }
 
     #[test]
