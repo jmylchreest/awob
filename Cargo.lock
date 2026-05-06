@@ -103,7 +103,7 @@ checksum = "c08606f8c3cbf4ce6ec8e28fb0014a2c086708fe954eaa885384a6165172e7e8"
 
 [[package]]
 name = "awob-cli"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "awob-client",
  "clap",
@@ -111,7 +111,7 @@ dependencies = [
 
 [[package]]
 name = "awob-client"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "awob-protocol",
  "serde_json",
@@ -123,7 +123,7 @@ dependencies = [
 
 [[package]]
 name = "awob-core"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "awob-protocol",
  "cosmic-text",
@@ -139,7 +139,7 @@ dependencies = [
 
 [[package]]
 name = "awob-daemon"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "awob-client",
  "awob-core",
@@ -166,7 +166,7 @@ dependencies = [
 
 [[package]]
 name = "awob-listener-backlight"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "awob-client",
  "clap",
@@ -180,7 +180,7 @@ dependencies = [
 
 [[package]]
 name = "awob-listener-battery"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "awob-client",
  "clap",
@@ -193,7 +193,7 @@ dependencies = [
 
 [[package]]
 name = "awob-listener-keyboard-backlight"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "awob-client",
  "clap",
@@ -206,7 +206,7 @@ dependencies = [
 
 [[package]]
 name = "awob-listener-pipewire"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "awob-client",
  "clap",
@@ -219,7 +219,7 @@ dependencies = [
 
 [[package]]
 name = "awob-listener-power-profile"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "awob-client",
  "clap",
@@ -230,7 +230,7 @@ dependencies = [
 
 [[package]]
 name = "awob-listener-wob"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "awob-client",
  "clap",
@@ -241,7 +241,7 @@ dependencies = [
 
 [[package]]
 name = "awob-protocol"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "serde",
  "serde_json",
