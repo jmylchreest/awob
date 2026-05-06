@@ -1,15 +1,9 @@
 //! SCTK + wlr-layer-shell integration.
 //!
-//! Owns a single layer-shell `LayerSurface` whose dimensions match the active
-//! [`Theme`]'s `surface { … }` block, anchors it via the theme's anchor + margins,
-//! and shows the most recently rendered tiny-skia [`Pixmap`] in a `wl_shm`
-//! buffer. When idle for the theme's `timeout`, the surface is dismissed
-//! (unmapped) until the next render.
-//!
-//! The daemon's IPC threads call [`SurfaceCommand::Render`] over the channel
-//! returned from [`SurfaceHandle::new`]; the Wayland thread owns the
-//! connection and surface and has no shared mutable state with the IPC side
-//! beyond that channel.
+//! Owns a single layer-shell `LayerSurface` sized + anchored from the active
+//! [`Theme`]'s `surface { … }` block, showing the most recently rendered
+//! tiny-skia [`Pixmap`] in a `wl_shm` buffer. The surface is unmapped after
+//! the theme's `timeout` until the next render.
 
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::{Duration, Instant};
@@ -44,46 +38,28 @@ use wayland_client::{
 };
 
 pub enum SurfaceCommand {
-    /// Push a fresh send into the wayland thread. The thread interpolates the
-    /// bar value from `last_value` to the value carried by `bindings` over
-    /// `transition_duration`, re-rendering each frame so the bar grows
-    /// smoothly. Theme + bindings live wholly inside the wayland thread for
-    /// the lifetime of the cycle.
+    /// Push a fresh send. The thread interpolates the bar value from
+    /// `last_value` to the value carried by `bindings` over
+    /// `transition_duration`, re-rendering each frame.
     Render {
         theme: Theme,
         bindings: Bindings,
         last_value: f64,
         transition_duration: Duration,
-        /// Directory the active theme was loaded from, or `None` for the
-        /// embedded fallback theme. Used by the icon resolver to look up
-        /// `<dir>/icons/<name>.{svg,png}` before falling back to system
-        /// icon themes.
+        /// `None` for the embedded fallback theme; otherwise the directory
+        /// the icon resolver searches before falling back to system themes.
         theme_dir: Option<std::path::PathBuf>,
-        /// Source identity for `(source, event)`-based dispatch (continuity
-        /// vs preempt vs queue). `None` for sends that don't track history.
         source: Option<String>,
-        /// Event name for `(source, event)`-based dispatch.
         event: String,
-        /// Whether this send may interrupt an OSD currently displaying a
-        /// *different* `(source, event)` pair. See `SendPayload::preempt`.
         preempt: bool,
     },
-    /// Replace the active theme on a *visible* OSD without restarting
-    /// the cycle. Sent by the daemon when the user runs `awob theme
-    /// set …`, when a theme file is hot-reloaded by the watcher, or
-    /// when the force-palette overlay is toggled at runtime.
-    ///
-    /// The wayland thread refreshes `surface_def` + `theme_dir` and
-    /// updates `bindings.palette` so palette-keyed colour expressions
-    /// (`fill="$bg"` etc.) resolve against the new palette on the
-    /// next frame. If the surface is currently idle (`Phase::Done`),
-    /// this is a no-op — the next send will pick up the new theme via
-    /// the daemon's normal path.
+    /// Replace the active theme on a visible OSD without restarting the
+    /// cycle. No-op when idle.
     Retheme {
         theme: Theme,
         theme_dir: Option<std::path::PathBuf>,
     },
-    /// Reserved for graceful shutdown of the wayland thread; not yet wired.
+    /// Reserved for graceful shutdown; not yet wired.
     #[allow(dead_code)]
     Stop,
 }
@@ -116,10 +92,6 @@ impl SurfaceHandle {
             preempt,
         });
     }
-    /// Push a runtime theme/palette change. If the OSD is currently
-    /// visible, it redraws with the new theme on the next frame.
-    /// If idle, the wayland thread silently records the new theme
-    /// for the next render.
     pub fn retheme(&self, theme: Theme, theme_dir: Option<std::path::PathBuf>) {
         let _ = self.tx.send(SurfaceCommand::Retheme { theme, theme_dir });
     }
@@ -296,21 +268,15 @@ struct State {
     surface_def: ThemeSurface,
     qh: QueueHandle<State>,
     running: bool,
-    /// Source identity of the active OSD, if any. Used to decide whether a
-    /// new send is a continuity update for the same `(source, event)` pair
-    /// or a different metric entirely.
+    /// `(source, event)` of the active OSD, used by `handle_send` to pick
+    /// continuity vs preempt vs queue.
     current_source: Option<String>,
-    /// Event name of the active OSD, if any. Paired with `current_source`.
     current_event: Option<String>,
-    /// Single-slot, last-write-wins queue of non-preempt sends that
-    /// arrived while a *different* `(source, event)` was visible. Drained
-    /// when the active cycle reaches `Phase::Done`.
+    /// Single-slot newest-wins queue for non-preempt sends arriving while a
+    /// different `(source, event)` is on screen. Drained at `Phase::Done`.
     pending: Option<PendingRender>,
 }
 
-/// Captured `Render` command parameters waiting for the active OSD to
-/// finish so a polite (non-preempt) send can take over without
-/// interrupting whatever's currently on screen.
 struct PendingRender {
     theme: Theme,
     bindings: Bindings,
@@ -321,7 +287,6 @@ struct PendingRender {
     event: String,
 }
 
-/// Animation phase relative to a cycle origin.
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Phase {
     FadeIn,
@@ -331,9 +296,6 @@ enum Phase {
 }
 
 impl State {
-    /// Dispatch entry point for a freshly arrived send. Decides whether
-    /// it applies immediately (idle, continuity, or preempt) or stashes
-    /// as `pending` to drain after the active cycle's fade-out.
     #[allow(clippy::too_many_arguments)]
     fn handle_send(
         &mut self,
@@ -366,11 +328,11 @@ impl State {
                 theme_dir,
                 source,
                 event,
+                same_pair,
             );
         } else {
             // Different `(source, event)` and the sender asked to wait.
-            // Stash; if a previous non-preempt was already pending it gets
-            // overwritten — single-slot, newest-wins.
+            // Single-slot, newest-wins: any earlier pending send is dropped.
             self.pending = Some(PendingRender {
                 theme,
                 bindings,
@@ -393,6 +355,7 @@ impl State {
         theme_dir: Option<std::path::PathBuf>,
         source: Option<String>,
         event: String,
+        is_continuity: bool,
     ) {
         let surface = theme.surface.clone();
         if self.layer.is_none() {
@@ -402,8 +365,8 @@ impl State {
         }
         let target_value = bindings.get("value").as_number().unwrap_or(0.0);
         let now = Instant::now();
-        // Capture state BEFORE mutating so we can compute the bar's
-        // current interpolated position for continuity.
+        // Snapshot before mutating so the continuity branch sees the old
+        // animation parameters.
         let prev_phase = self.current_phase();
         let was_active = matches!(prev_phase, Phase::FadeIn | Phase::Show | Phase::FadeOut);
         let current_interp = self.current_value_interpolated();
@@ -415,34 +378,31 @@ impl State {
         self.transition_duration = transition_duration;
         self.renderer.set_theme_dir(theme_dir);
 
-        if was_active {
-            // Continuity send: bar is already on screen, possibly mid-
-            // animation. Use the current interpolated position as the
-            // starting point for the new transition (no jump-back) and
-            // backdate `sent_at` by `fade_in` so the transition window
-            // starts immediately — the alpha is already 1.0, no need to
-            // wait through a hold period.
+        if was_active && is_continuity {
+            // Same `(source, event)` mid-animation: start from the current
+            // interpolated position (no jump-back) and backdate `sent_at`
+            // past `fade_in` so the new transition starts immediately
+            // instead of waiting through another hold.
             self.last_value = current_interp;
             self.sent_at = now.checked_sub(self.surface_def.fade_in).unwrap_or(now);
         } else {
-            // Fresh send: bar will fade in showing the previous value
-            // (or the target itself when no history), then animate.
+            // Fresh send or preempting metric switch — use the
+            // (source, event)-keyed `last_value`. The on-screen interp
+            // belongs to the previous metric and would corrupt the delta.
             self.last_value = last_value;
             self.sent_at = now;
         }
 
-        // Continuity for fade alpha: if a previous cycle was already past
-        // fade-in, jump back to start-of-show so rapid re-sends don't
-        // strobe through fade-in.
-        self.cycle_start = match (prev_phase, self.cycle_start) {
-            (Phase::Show, Some(_)) | (Phase::FadeOut, Some(_)) => {
+        // Continuity sends past fade-in jump back to start-of-show so rapid
+        // re-sends don't strobe. A metric switch gets a fresh fade-in so the
+        // new OSD reads as a distinct event.
+        self.cycle_start = match (prev_phase, self.cycle_start, is_continuity) {
+            (Phase::Show, Some(_), true) | (Phase::FadeOut, Some(_), true) => {
                 Some(now - self.surface_def.fade_in)
             }
             _ => Some(now),
         };
 
-        // Track the active OSD's identity so the next send can decide
-        // continuity vs preempt vs queue.
         self.current_source = source;
         self.current_event = Some(event);
 
@@ -451,34 +411,18 @@ impl State {
         }
     }
 
-    /// Replace the active theme on a *visible* OSD without restarting
-    /// the cycle. Driven by `SetTheme` / `Reload` / `SetForcePalette`
-    /// IPC requests and by the daemon's hot-reload watcher when a
-    /// theme file changes on disk.
-    ///
-    /// Behaviour:
-    /// * Idle (no active cycle): nothing to redraw. The stored theme
-    ///   isn't updated either — the next `Send` will arrive with the
-    ///   new theme already applied via the daemon's normal path.
-    /// * Active: swap `theme`, `theme_dir`, `surface_def`; refresh
-    ///   `bindings.palette` so palette-keyed colour expressions
-    ///   resolve against the new palette on the next frame; redraw.
-    ///
-    /// Style overrides previously applied via `apply_style` retain
-    /// their resolved Colour values — the visible bar's `$accent`
-    /// won't update until the next `Send` re-runs `apply_style`.
-    /// Palette-keyed colours (`fill="$bg"` etc.) DO update because
-    /// they re-resolve from `bindings.palette` on every render.
+    /// Hot-swap theme + palette on a visible OSD without restarting the
+    /// cycle. No-op when idle — the next send picks up the new theme.
+    /// Palette-keyed colours (`fill="$bg"`) refresh on the next frame;
+    /// style-resolved colours (e.g. `$accent` from `apply_style`) only
+    /// refresh on the next send.
     fn retheme(&mut self, theme: Theme, theme_dir: Option<std::path::PathBuf>) {
-        // Only do work if there's an active OSD on screen. Idle ⇒
-        // next send picks up the new theme via main.rs's normal path.
         if self.theme.is_none() || self.bindings.is_none() {
             return;
         }
-        // Take layout fields (size, anchor, margin) from the new theme
-        // but preserve the in-flight cycle's timing — a runtime swap
-        // mustn't shorten an OSD whose show duration the caller
-        // explicitly extended via `--timeout`.
+        // Layout from the new theme, timing from the in-flight cycle —
+        // a runtime swap mustn't shorten an OSD whose `show` was extended
+        // by `--timeout`.
         let new_surface = theme.surface.clone();
         let merged = ThemeSurface {
             width: new_surface.width,
@@ -604,11 +548,8 @@ impl State {
         }
         let alpha = self.current_alpha();
 
-        // Per-frame value transition progress, sequenced *after* fade-in.
-        // While the bar is still fading in, the value is held at lastValue
-        // — the user sees the previous state appear first, then watches it
-        // visibly transition once the bar is fully on screen. Only then
-        // does the brighter delta wedge reach its peak visibility.
+        // Value transition is sequenced *after* fade-in: the bar holds at
+        // `last_value` while fading in, then animates once fully visible.
         let elapsed = Instant::now().saturating_duration_since(self.sent_at);
         let fade_in = self.surface_def.fade_in;
         let transition_progress = if self.transition_duration.as_millis() == 0 {
@@ -621,15 +562,12 @@ impl State {
         let eased = 1.0 - (1.0 - transition_progress).powi(3);
         let interp_value = self.last_value + (self.target_value - self.last_value) * eased;
 
-        // Build per-frame bindings: replace `value` with the interpolated
-        // current and add `transitionProgress` for the bar's delta highlight.
         let mut frame_bindings = self.bindings.as_ref().unwrap().clone();
         frame_bindings.set("value", Value::Number(interp_value));
         frame_bindings.set("transitionProgress", Value::Number(transition_progress));
 
-        // Show-phase elapsed (after fade-in completes) drives per-element
-        // animations like `pulse=true`. None during fade-in/out keeps
-        // animations off until the OSD is fully on screen.
+        // `Some` only during Show so element animations (pulse etc.) stay
+        // paused while the OSD is fading in or out.
         let phase = self.current_phase();
         let show_elapsed = if matches!(phase, Phase::Show) {
             Some(elapsed.saturating_sub(fade_in))
@@ -677,21 +615,16 @@ impl State {
         match self.current_phase() {
             Phase::FadeIn | Phase::FadeOut => Some(Duration::from_millis(16)),
             Phase::Show => {
-                // The value transition is sequenced *after* fade-in, so the
-                // window we need 60Hz for during Show is `fade_in +
-                // transition`. After that the bar is settled — but if
-                // any element has an active animation (`pulse=true`
-                // etc.) we keep redrawing at 30fps so the animation
-                // actually plays. Without an animation this falls
-                // through to a single sleep until fade-out.
+                // 60Hz during the value transition window (fade_in + transition);
+                // 30Hz while element animations are still playing; otherwise sleep
+                // straight through to fade-out.
                 let elapsed = Instant::now().saturating_duration_since(self.sent_at);
                 let animation_window = self.surface_def.fade_in + self.transition_duration;
                 if elapsed < animation_window {
                     Some(Duration::from_millis(16))
                 } else if self.has_active_element_animations() {
-                    // 30fps cap during pulse / breathe / etc. — same
-                    // throughput as a slow video, plenty for a transient
-                    // OSD, doesn't burn battery on integrated GPUs.
+                    // 30fps is plenty for transient OSDs and saves battery
+                    // on integrated GPUs.
                     Some(Duration::from_millis(33))
                 } else {
                     let start = self.cycle_start?;
@@ -705,10 +638,6 @@ impl State {
         }
     }
 
-    /// True if the active theme has at least one element with a
-    /// non-empty `animations` list. Drives the 30fps redraw loop
-    /// during the show phase — without this check we'd sleep until
-    /// fade-out and miss every pulse cycle.
     fn has_active_element_animations(&self) -> bool {
         let Some(theme) = &self.theme else {
             return false;
@@ -732,8 +661,7 @@ impl State {
                     self.current_source = None;
                     self.current_event = None;
                 }
-                // Now that the active cycle has fully torn down, drain
-                // a queued non-preempt send (if any) as a fresh OSD.
+                // Drain a queued non-preempt send as a fresh OSD.
                 if let Some(p) = self.pending.take() {
                     self.queue_render(
                         p.theme,
@@ -743,6 +671,7 @@ impl State {
                         p.theme_dir,
                         p.source,
                         p.event,
+                        false,
                     );
                 }
             }
@@ -756,11 +685,9 @@ impl State {
 }
 
 fn argb_premul_with_alpha(src: &[u8], dst: &mut [u8], alpha: f32) {
-    // tiny-skia's Pixmap::data() is premultiplied RGBA in byte order R G B A.
-    // wl_shm Argb8888 on little-endian wants 0xAARRGGBB packed = byte order
-    // B G R A. We multiply each channel by `alpha` to fade the entire surface
-    // (premultiplication keeps the math correct: if input is straight
-    // premultiplied, scaling all four channels uniformly preserves it).
+    // tiny-skia: premultiplied RGBA in R,G,B,A byte order.
+    // wl_shm Argb8888 on little-endian: B,G,R,A byte order.
+    // Uniform scaling preserves premultiplication.
     debug_assert_eq!(src.len(), dst.len());
     let a = alpha.clamp(0.0, 1.0);
     if a >= 0.999 {
