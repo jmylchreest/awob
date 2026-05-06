@@ -93,6 +93,14 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or_else(|| format!("wob-fifo-{}", std::process::id()));
     tracing::info!("source={source}");
 
+    let socket = cli.socket.as_deref();
+    // Hold the daemon connection across lines. Scripts that fan out
+    // many `echo N > $WOB_SOCK` writes in quick succession would
+    // otherwise force a connect / disconnect per line. On any send
+    // error we drop the connection and reconnect lazily on the next
+    // line.
+    let mut client: Option<Client> = None;
+
     loop {
         let f = match std::fs::OpenOptions::new().read(true).open(&fifo) {
             Ok(f) => f,
@@ -134,23 +142,21 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             if let Some(st) = style {
                 s = s.style(st);
             }
-            match cli.socket.clone() {
-                Some(p) => match Client::connect_to(&p) {
-                    Ok(mut c) => {
-                        if let Err(e) = c.send(s.build()) {
-                            tracing::info!("send: {e}");
-                        }
+            if client.is_none() {
+                match Client::connect_or_default(socket) {
+                    Ok(c) => client = Some(c),
+                    Err(e) => {
+                        tracing::info!("connect: {e}");
+                        continue;
                     }
-                    Err(e) => tracing::info!("connect: {e}"),
-                },
-                None => match Client::connect() {
-                    Ok(mut c) => {
-                        if let Err(e) = c.send(s.build()) {
-                            tracing::info!("send: {e}");
-                        }
-                    }
-                    Err(e) => tracing::info!("connect: {e}"),
-                },
+                }
+            }
+            if let Some(c) = client.as_mut()
+                && let Err(e) = c.send(s.build())
+            {
+                tracing::info!("send: {e}");
+                // Drop the connection so the next line reconnects.
+                client = None;
             }
         }
     }

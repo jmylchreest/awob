@@ -459,10 +459,7 @@ fn emit_osd(
     pct: f64,
     state: BatteryState,
 ) -> awob_client::Result<()> {
-    let mut c = match socket {
-        Some(p) => Client::connect_to(p)?,
-        None => Client::connect()?,
-    };
+    let mut c = Client::connect_or_default(socket.as_deref())?;
     let (icon, style) = pick_visuals(pct, state);
     let app = format!("Battery: {}", state.slug());
     let s = Send::new("battery", pct)

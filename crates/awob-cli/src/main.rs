@@ -91,15 +91,8 @@ enum ForcePaletteCmd {
     Clear,
 }
 
-fn connect(socket: Option<PathBuf>) -> Result<Client, awob_client::Error> {
-    match socket {
-        Some(p) => Client::connect_to(&p),
-        None => Client::connect(),
-    }
-}
-
 fn run(cli: Cli) -> Result<(), awob_client::Error> {
-    let mut c = connect(cli.socket)?;
+    let mut c = Client::connect_or_default(cli.socket.as_deref())?;
     match cli.cmd {
         Cmd::Send {
             event,

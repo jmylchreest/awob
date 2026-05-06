@@ -123,7 +123,7 @@ pub struct AudioState {
     clippy::too_many_arguments,
     reason = "OSD send-site naturally takes value/state/labels/icon — folding into a struct hurts call-site readability"
 )]
-pub fn fire(
+pub fn emit_osd(
     socket: &Option<PathBuf>,
     source: &str,
     channel: Channel,
@@ -138,23 +138,20 @@ pub fn fire(
         Channel::Mic => "mic",
     };
     let listener_id = listener_id_for(channel, kind, source);
+    let (default_icon, style) = pick_visuals(channel, state.value, state.muted);
     // App streams: prefer the app's own icon (Spotify, Firefox, mpv) so
     // the OSD reads as "Spotify changed volume" at a glance. The bar fill
     // already conveys level. Device streams continue using the level-based
     // audio-volume-* / microphone-* icons.
     let icon: String = match icon_override {
         Some(i) if !i.is_empty() => i.to_string(),
-        _ => pick_icon(channel, state.value, state.muted).to_string(),
+        _ => default_icon.to_string(),
     };
-    let style = pick_style(state.value, state.muted);
     let mut value = state.value;
     if state.muted && mute_volume_zero {
         value = 0.0;
     }
-    let mut c = match socket {
-        Some(p) => Client::connect_to(p)?,
-        None => Client::connect()?,
-    };
+    let mut c = Client::connect_or_default(socket.as_deref())?;
     let s = Send::new(event, value)
         .max(1.0)
         .listener_id(listener_id)
@@ -169,41 +166,45 @@ pub fn fire(
     c.send(s.build())
 }
 
-fn pick_icon(ch: Channel, value: f64, muted: bool) -> &'static str {
-    // Value here is already in 0..1 (or higher) cubic/linear-agnostic form.
-    let pct = (value * 100.0) as i32;
-    match (ch, muted) {
-        (_, true) => match ch {
+/// Pick the OSD icon and style for a given (channel, value, muted).
+///
+/// Combined into one call because every emit uses both — splitting
+/// just doubles the cost of evaluating the same conditions and adds
+/// risk of the two falling out of sync when ranges change.
+///
+/// `value` is in 0..1 (or higher for boost) regardless of cubic /
+/// linear taper, so callers don't need to translate.
+fn pick_visuals(ch: Channel, value: f64, muted: bool) -> (&'static str, &'static str) {
+    if muted {
+        let icon = match ch {
             Channel::Speaker => "audio-volume-muted",
             Channel::Mic => "microphone-disabled",
-        },
-        (Channel::Speaker, false) => match pct {
+        };
+        return (icon, "muted");
+    }
+    let pct = (value * 100.0) as i32;
+    let icon = match ch {
+        Channel::Speaker => match pct {
             v if v >= 66 => "audio-volume-high",
             v if v >= 33 => "audio-volume-medium",
             _ => "audio-volume-low",
         },
-        (Channel::Mic, false) => {
+        Channel::Mic => {
             if pct >= 33 {
                 "microphone-sensitivity-high"
             } else {
                 "microphone-sensitivity-low"
             }
         }
-    }
-}
-
-fn pick_style(value: f64, muted: bool) -> &'static str {
-    if muted {
-        "muted"
-    } else if value >= 1.0 {
-        "warn"
-    }
-    // > 100% boost
-    else if value >= 0.33 {
+    };
+    let style = if value >= 1.0 {
+        "warn" // > 100 % boost
+    } else if value >= 0.33 {
         "normal"
     } else {
         "low"
-    }
+    };
+    (icon, style)
 }
 
 /// One event the pipewire mainloop hands off to the I/O worker.
@@ -240,7 +241,7 @@ fn stable_node_hash(name: &str) -> String {
 }
 
 /// Per-node identity decided once at bind time and copied into the param
-/// closure. Carries everything `fire()` needs to label the OSD without
+/// closure. Carries everything `emit_osd()` needs to label the OSD without
 /// re-querying the node properties on every event.
 #[derive(Clone)]
 struct NodeIdentity {
@@ -338,7 +339,7 @@ fn spawn_io_worker(
         .name("awob-pw-io".into())
         .spawn(move || {
             while let Ok(ev) = rx.recv() {
-                if let Err(e) = fire(
+                if let Err(e) = emit_osd(
                     &socket,
                     &ev.source,
                     ev.channel,
@@ -672,39 +673,38 @@ fn main() -> ExitCode {
 mod tests {
     use super::*;
 
+    fn icon(ch: Channel, v: f64, m: bool) -> &'static str {
+        pick_visuals(ch, v, m).0
+    }
+
+    fn style(ch: Channel, v: f64, m: bool) -> &'static str {
+        pick_visuals(ch, v, m).1
+    }
+
     #[test]
     fn speaker_icons() {
-        assert_eq!(
-            pick_icon(Channel::Speaker, 0.90, false),
-            "audio-volume-high"
-        );
-        assert_eq!(
-            pick_icon(Channel::Speaker, 0.50, false),
-            "audio-volume-medium"
-        );
-        assert_eq!(pick_icon(Channel::Speaker, 0.10, false), "audio-volume-low");
-        assert_eq!(
-            pick_icon(Channel::Speaker, 0.50, true),
-            "audio-volume-muted"
-        );
+        assert_eq!(icon(Channel::Speaker, 0.90, false), "audio-volume-high");
+        assert_eq!(icon(Channel::Speaker, 0.50, false), "audio-volume-medium");
+        assert_eq!(icon(Channel::Speaker, 0.10, false), "audio-volume-low");
+        assert_eq!(icon(Channel::Speaker, 0.50, true), "audio-volume-muted");
     }
     #[test]
     fn mic_icons() {
         assert_eq!(
-            pick_icon(Channel::Mic, 0.50, false),
+            icon(Channel::Mic, 0.50, false),
             "microphone-sensitivity-high"
         );
         assert_eq!(
-            pick_icon(Channel::Mic, 0.10, false),
+            icon(Channel::Mic, 0.10, false),
             "microphone-sensitivity-low"
         );
-        assert_eq!(pick_icon(Channel::Mic, 0.50, true), "microphone-disabled");
+        assert_eq!(icon(Channel::Mic, 0.50, true), "microphone-disabled");
     }
     #[test]
     fn styles() {
-        assert_eq!(pick_style(1.5, false), "warn");
-        assert_eq!(pick_style(0.5, false), "normal");
-        assert_eq!(pick_style(0.10, false), "low");
-        assert_eq!(pick_style(0.5, true), "muted");
+        assert_eq!(style(Channel::Speaker, 1.5, false), "warn");
+        assert_eq!(style(Channel::Speaker, 0.5, false), "normal");
+        assert_eq!(style(Channel::Speaker, 0.10, false), "low");
+        assert_eq!(style(Channel::Speaker, 0.5, true), "muted");
     }
 }

@@ -27,7 +27,6 @@ use clap::Parser;
 use notify::{Event, EventKind, RecursiveMode, Watcher};
 
 const PROFILE_PATH: &str = "/sys/firmware/acpi/platform_profile";
-const CHOICES_PATH: &str = "/sys/firmware/acpi/platform_profile_choices";
 const LISTENER_ID: &str = "awob-listener-power-profile";
 const SOURCE: &str = "power-profile";
 
@@ -129,11 +128,7 @@ fn presentation(profile: &str) -> (f64, String, &'static str, &'static str) {
 
 fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     let path = wait_for_attribute();
-    let choices = read_profile(Path::new(CHOICES_PATH)).unwrap_or_default();
-    tracing::info!(
-        "source={SOURCE} path={} choices={choices:?}",
-        path.display()
-    );
+    tracing::info!("source={SOURCE} path={}", path.display());
 
     // inotify on the attribute. Wakes the loop on writes from PPD,
     // tuned, the user echoing into it, ACPI hotkeys handled in
@@ -161,12 +156,11 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
         }
-        let current = read_profile(&path).unwrap_or_default();
-        if current.is_empty() {
+        let Some(current) = read_profile(&path) else {
             continue;
-        }
+        };
         if filter.changed((), &current)
-            && let Err(e) = fire(&cli.socket, &current)
+            && let Err(e) = emit_osd(&cli.socket, &current)
         {
             tracing::info!("send: {e}");
         }
@@ -174,12 +168,9 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn fire(socket: &Option<PathBuf>, profile: &str) -> awob_client::Result<()> {
+fn emit_osd(socket: &Option<PathBuf>, profile: &str) -> awob_client::Result<()> {
     let (value, label, icon, style) = presentation(profile);
-    let mut c = match socket {
-        Some(p) => Client::connect_to(p)?,
-        None => Client::connect()?,
-    };
+    let mut c = Client::connect_or_default(socket.as_deref())?;
     let s = Send::new("power-profile", value)
         .max(1.0)
         .listener_id(LISTENER_ID)

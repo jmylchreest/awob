@@ -89,6 +89,16 @@ impl Client {
         Ok(Self { stream, reader })
     }
 
+    /// Connect to the daemon at `path` if `Some`, otherwise the default
+    /// socket. Eliminates the `match { Some(p) => connect_to(p), None
+    /// => connect() }` pattern from every listener / CLI call site.
+    pub fn connect_or_default(path: Option<&Path>) -> Result<Self> {
+        match path {
+            Some(p) => Self::connect_to(p),
+            None => Self::connect(),
+        }
+    }
+
     fn request(&mut self, req: &Request) -> Result<Response> {
         let mut line = serde_json::to_vec(req)?;
         line.push(b'\n');

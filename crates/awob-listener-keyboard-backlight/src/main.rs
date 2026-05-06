@@ -173,7 +173,17 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
 
     tracing::info!("device={device_name} source={source} label={label:?}");
 
-    let max = read_u32(&max_path).unwrap_or(100) as f64;
+    let max = match read_u32(&max_path) {
+        Ok(v) => v as f64,
+        Err(e) => {
+            tracing::warn!(
+                "max_brightness {} unreadable ({e}); falling back to 100 — \
+                 percentages may be off until restart",
+                max_path.display()
+            );
+            100.0
+        }
+    };
 
     // Source 1 — inotify on the sysfs file. Cheap, wakes the loop on
     // userspace writes (brightnessctl etc).
@@ -222,9 +232,15 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
         }
-        let current = read_u32(&brightness_path).unwrap_or(0);
+        // Skip the cycle on a transient read failure rather than
+        // inventing a `0` value — feeding 0 into ChangeFilter would
+        // emit a spurious "brightness=0%" OSD on the next-recovered
+        // read.
+        let Ok(current) = read_u32(&brightness_path) else {
+            continue;
+        };
         if filter.changed((), &current) {
-            let _ = send_to_daemon(
+            let _ = emit_osd(
                 &cli.socket,
                 &source,
                 &device_name,
@@ -264,7 +280,7 @@ fn run_udev(want_device: &str, tx: mpsc::Sender<()>) -> Result<(), Box<dyn std::
     }
 }
 
-fn send_to_daemon(
+fn emit_osd(
     socket: &Option<PathBuf>,
     source: &str,
     device: &str,
@@ -272,10 +288,7 @@ fn send_to_daemon(
     value: f64,
     max: f64,
 ) -> awob_client::Result<()> {
-    let mut c = match socket {
-        Some(p) => Client::connect_to(p)?,
-        None => Client::connect()?,
-    };
+    let mut c = Client::connect_or_default(socket.as_deref())?;
     let s = Send::new("keyboard-backlight", value)
         .listener_id(listener_id_for(device))
         .source(source)
