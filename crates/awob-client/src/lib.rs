@@ -17,16 +17,8 @@ pub mod listener;
 
 pub use awob_protocol::{HistoryEntry, PROTOCOL_VERSION, Request, Response, SendPayload};
 
-/// Set up the workspace-wide tracing subscriber. Idempotent —
-/// subsequent calls are no-ops if a global subscriber is already
-/// installed (matters for tests + when listeners and the daemon
-/// share a process during integration testing).
-///
-/// Default level: `info` for the program itself, suppressing noisy
-/// framework logs (smithay-client-toolkit, wayland-client, etc.) at
-/// warn unless `RUST_LOG` overrides. The user can dial up with
-/// `RUST_LOG=debug` to see per-send detail and per-frame draw
-/// summaries.
+/// Idempotent shared tracing subscriber. Honours `RUST_LOG` if set,
+/// otherwise applies `default_directives`.
 pub fn init_tracing(default_directives: &str) {
     use tracing_subscriber::{EnvFilter, fmt};
     let filter =
@@ -89,9 +81,7 @@ impl Client {
         Ok(Self { stream, reader })
     }
 
-    /// Connect to the daemon at `path` if `Some`, otherwise the default
-    /// socket. Eliminates the `match { Some(p) => connect_to(p), None
-    /// => connect() }` pattern from every listener / CLI call site.
+    /// Connect to `path` if `Some`, otherwise the default socket.
     pub fn connect_or_default(path: Option<&Path>) -> Result<Self> {
         match path {
             Some(p) => Self::connect_to(p),
@@ -167,9 +157,6 @@ impl Client {
         }
     }
 
-    /// List every theme the daemon can resolve, plus the embedded
-    /// fallback. Each entry carries `active`, `source`, optional
-    /// `description` from the theme's `manifest.toml`.
     pub fn theme_list(&mut self) -> Result<Vec<awob_protocol::ThemeInfo>> {
         match self.request(&Request::ThemeList)? {
             Response::ThemeList { themes } => Ok(themes),
@@ -177,9 +164,7 @@ impl Client {
         }
     }
 
-    /// Install or clear the runtime force-palette overlay.
-    /// `Some(path)` activates the overlay; `None` removes any
-    /// active one. Triggers an immediate theme reload.
+    /// `Some(path)` installs the overlay; `None` clears it.
     pub fn set_force_palette(&mut self, path: Option<String>) -> Result<()> {
         match self.request(&Request::SetForcePalette { path })? {
             Response::Ok => Ok(()),
@@ -248,19 +233,16 @@ impl Send {
         self.inner.timeout_ms = Some(t);
         self
     }
-    /// Mark this send as user-interactive: it'll hot-swap the active OSD
-    /// even if a different `(source, event)` is currently displayed.
-    /// Right for volume/brightness/mic-mute key presses. Ambient sources
-    /// (battery, network) leave this unset.
+    /// Hot-swap the active OSD even when a different `(source, event)`
+    /// is on screen. Use for user-interactive events; leave unset for
+    /// ambient updates.
     pub fn preempt(mut self, preempt: bool) -> Self {
         self.inner.preempt = preempt;
         self
     }
 
-    /// Fill in `listener_id` with the basename of the current executable
-    /// (e.g. `"awob"`, `"awob-listener-pipewire"`) if it isn't already set.
-    /// Listener binaries call this on every send so the daemon can detect
-    /// duplicate listener instances.
+    /// Set `listener_id` to the basename of the current executable when
+    /// unset. Used by listener binaries so the daemon can detect duplicates.
     pub fn auto_listener_id(mut self) -> Self {
         if self.inner.listener_id.is_none()
             && let Ok(p) = std::env::current_exe()

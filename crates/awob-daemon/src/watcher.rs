@@ -1,10 +1,6 @@
 //! File-watcher for the active theme + every file it imported.
-//!
-//! Uses `notify` to subscribe to modify/create/remove events on the union
-//! of `LoadedTheme::watch_paths()`. On any event we send a single coalesced
-//! `()` over the reload channel — the daemon worker picks it up, debounces
-//! ~80ms (compositor IDEs love to fire bursts of events on save), and
-//! atomically reparses the theme.
+//! Coalesces events into a single `()` on the reload channel; debouncing
+//! happens in the daemon worker.
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Sender;
@@ -34,17 +30,14 @@ impl ThemeWatcher {
         })
     }
 
-    /// Replace the watch set. Returns the new (filtered) watch list.
     pub fn set_paths(&mut self, paths: &[PathBuf]) -> Vec<PathBuf> {
         for p in &self.watching {
             let _ = self.inner.unwatch(p);
         }
         self.watching.clear();
 
-        // Watch each file's parent directory rather than the file itself —
-        // editors often replace files (write-temp + rename) which sends a
-        // Remove for the inode even though the path content is fresh. Watching
-        // the directory captures both forms reliably.
+        // Watch parent dirs, not the files — editors do write-temp+rename
+        // which would otherwise drop the inode and lose the watch.
         let mut dirs: Vec<PathBuf> = Vec::new();
         for p in paths {
             if let Some(parent) = p.parent() {
@@ -63,10 +56,8 @@ impl ThemeWatcher {
         self.watching.clone()
     }
 
-    /// Returns true iff `path` is inside one of the directories currently
-    /// being watched, i.e. an event for this path is one we'd receive.
-    /// Reserved for future filtering — we currently treat any covered event
-    /// as a reload trigger and let the parser decide if the file is relevant.
+    /// Reserved for future filtering — currently every covered event
+    /// triggers reload and lets the parser sort relevance.
     #[allow(dead_code)]
     pub fn covers(&self, path: &Path) -> bool {
         self.watching.iter().any(|d| path.starts_with(d))

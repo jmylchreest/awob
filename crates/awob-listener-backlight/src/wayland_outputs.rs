@@ -1,20 +1,8 @@
 //! One-shot Wayland `wl_output` probe.
 //!
-//! Connects to `$WAYLAND_DISPLAY`, enumerates outputs, and returns a map
-//! keyed by `wl_output.name` (the connector slug, e.g. `"eDP-1"`,
-//! `"HDMI-A-1"`) with each output's `make` + `model` + `description`.
-//!
-//! Used at backlight-listener startup to translate the connector that
-//! sysfs reports (`/sys/class/backlight/<dev>/device → card1-eDP-1`) into
-//! a friendly label like `"BOE NE135A1M-NY1"`. Returns an empty map (and
-//! the caller falls back to a heuristic) on:
-//!
-//! * `WAYLAND_DISPLAY` unset
-//! * compositor hangs / refuses connect
-//! * no outputs reported
-//!
-//! Connection is opened, dispatched to a short timeout, then dropped.
-//! No long-running Wayland code in this listener.
+//! Returns a map keyed by `wl_output.name` (`"eDP-1"`, `"HDMI-A-1"`)
+//! with each output's `make` + `model` + `description`. Best-effort:
+//! returns empty on any failure so the caller's fallback wins.
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -32,9 +20,7 @@ pub struct OutputInfo {
 
 #[derive(Default)]
 struct ProbeState {
-    /// Outputs seen so far, indexed by their wl_output proxy ID.
     in_progress: HashMap<u32, OutputInfo>,
-    /// Outputs whose `done` event has fired and which are now finalised.
     finalised: Vec<OutputInfo>,
     expected: usize,
 }
@@ -55,10 +41,7 @@ pub fn probe(timeout: Duration) -> HashMap<String, OutputInfo> {
     // First roundtrip: registry globals, output bindings.
     let _ = event_queue.roundtrip(&mut state);
 
-    // Drive the queue until every output has fired its `done` event, or
-    // the timeout elapses. The pipewire / hyprland combination usually
-    // finishes within a single dispatch but multi-output systems can
-    // need a second.
+    // Drive the queue until every output fires `done` or timeout elapses.
     let deadline = Instant::now() + timeout;
     while state.finalised.len() < state.expected && Instant::now() < deadline {
         if event_queue.dispatch_pending(&mut state).is_err() {

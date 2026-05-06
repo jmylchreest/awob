@@ -1,27 +1,12 @@
 //! Soft drop-shadow rendering.
 //!
-//! Shadows are declared in scene files via the `shadow` attribute on a
-//! `rect` element, with CSS `box-shadow`-flavoured syntax:
+//! `rect` elements carry a CSS-`box-shadow`-flavoured `shadow` attribute:
 //!
 //! ```kdl
 //! rect ... shadow="<offset-x> <offset-y> <blur-radius> <colour>"
 //! ```
 //!
-//! e.g. `shadow="0 8 24 rgba(0,0,0,0.4)"` — soft black drop, no horizontal
-//! offset, 8 px down, 24 px blur.
-//!
-//! ## How it works
-//!
-//! At first sight of a (rect-size, corner-radius, blur-radius) tuple we
-//! rasterise a binary alpha mask of the rounded rect into a buffer that's
-//! padded by `blur_radius * 2` on every side, then blur that mask in-place
-//! with a separable Gaussian. The result — an alpha-only buffer — is
-//! cached by `(w, h, radius, blur)` so subsequent frames just blit it into
-//! the destination pixmap, multiplying by the shadow's colour at composite
-//! time. Colour isn't part of the cache key because tinting is cheap.
-//!
-//! Performance: typical OSD shadow is a 360×64 rect, blur=24 → mask is
-//! 408×112 bytes (~46 KB). Computing it once per theme change is sub-ms.
+//! e.g. `shadow="0 8 24 rgba(0,0,0,0.4)"`.
 
 use std::collections::HashMap;
 
@@ -68,14 +53,9 @@ pub fn parse(s: &str) -> Option<ShadowSpec> {
     })
 }
 
-/// `(width, height, corner_radius, blur_radius)` → cached mask.
 type MaskKey = (u32, u32, u32, u32);
-/// `(mask_w, mask_h, alpha-bytes)`.
 type MaskEntry = (u32, u32, Vec<u8>);
 
-/// Cache of pre-blurred shadow masks. The renderer keeps one of these and
-/// hits it once per shadowed rect per render — empty cost on repeat
-/// renders of the same theme.
 #[derive(Default)]
 pub struct ShadowCache {
     masks: HashMap<MaskKey, MaskEntry>,

@@ -74,11 +74,8 @@ struct Cli {
     #[arg(long)]
     label: Option<String>,
 
-    /// Polling interval in milliseconds for the sysfs brightness
-    /// re-read. This is the worst-case OSD latency on hardware where
+    /// sysfs poll interval in ms — worst-case OSD latency on hardware where
     /// neither inotify nor udev fires (e.g. Framework chromeos EC).
-    /// On hardware where they do fire, polling rarely matters —
-    /// every wake is external.
     #[arg(long, default_value_t = 250, value_parser = clap::value_parser!(u64).range(100..=2000))]
     poll_interval: u64,
 }
@@ -131,15 +128,9 @@ fn read_u32(p: &Path) -> std::io::Result<u32> {
         .map_err(|e| std::io::Error::other(format!("parse {}: {e}", p.display())))
 }
 
-/// Re-scan cadence when no LED is present yet. Sits in the background
-/// of a desktop without an internal keyboard backlight, catching a
-/// hot-plugged USB keyboard whose driver registers an LED. 60 s
-/// because keyboards don't appear/disappear often.
+/// 60s cadence — keyboards don't appear/disappear often.
 const NO_DEVICE_RESCAN: Duration = Duration::from_secs(60);
 
-/// Block until a keyboard-backlight LED appears at the given device
-/// name (or via auto-discovery). Logs the "no device" state once at
-/// INFO and subsequent quiet retries at DEBUG.
 fn wait_for_device(explicit: Option<&str>) -> PathBuf {
     wait_for_resource(
         || match explicit {
@@ -212,10 +203,8 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             }
         })?;
 
-    // Source 3 — polling fall-through, expressed as the recv_timeout
-    // below. Backstop for drivers that update the cached sysfs value
-    // without firing either inotify or udev (Framework laptops with
-    // the chromeos EC are the canonical case).
+    // Source 3 — polling backstop for drivers that update the cached
+    // sysfs value without firing inotify or udev (Framework chromeos EC).
     let poll_interval = Duration::from_millis(cli.poll_interval);
 
     let mut filter: ChangeFilter<(), u32> = ChangeFilter::new();
@@ -223,19 +212,15 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     loop {
         match rx.recv_timeout(poll_interval) {
             Ok(()) => {
-                // Some source fired — coalesce a burst before re-reading.
+                // Coalesce a burst before re-reading.
                 std::thread::sleep(debounce);
                 while rx.try_recv().is_ok() {}
             }
-            Err(mpsc::RecvTimeoutError::Timeout) => {
-                // No wake; polling path.
-            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
         }
-        // Skip the cycle on a transient read failure rather than
-        // inventing a `0` value — feeding 0 into ChangeFilter would
-        // emit a spurious "brightness=0%" OSD on the next-recovered
-        // read.
+        // Skip on transient read failure — a `0` would otherwise emit a
+        // spurious "brightness=0%" OSD before the next good read.
         let Ok(current) = read_u32(&brightness_path) else {
             continue;
         };
@@ -253,10 +238,6 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// Subscribe to udev `change` events on the `leds` subsystem and
-/// forward each one matching our device into the wake channel.
-/// Returns when the channel is dropped (main loop exited) or on a
-/// fatal udev error.
 fn run_udev(want_device: &str, tx: mpsc::Sender<()>) -> Result<(), Box<dyn std::error::Error>> {
     let monitor = udev::MonitorBuilder::new()?
         .match_subsystem("leds")?

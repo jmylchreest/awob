@@ -1,23 +1,13 @@
-//! awob PipeWire listener.
+//! awob PipeWire listener — event-driven, no polling.
 //!
-//! Subscribes to the default audio sink (speaker) and source (microphone)
-//! through native PipeWire APIs and emits an OSD on every volume/mute
-//! change — fully event-driven, no polling.
+//! The pipewire mainloop binds to `Audio/Sink` and `Audio/Source` nodes
+//! and parses each `Props` change for `channelVolumes[]` (cubic curve)
+//! and `mute`, pushing `(channel, value, muted)` over an mpsc to a worker
+//! thread that does the blocking IPC send.
 //!
-//! Architecture:
-//! * The pipewire mainloop runs on the foreground thread, owns the
-//!   registry, and binds to nodes whose `media.class` is `Audio/Sink` or
-//!   `Audio/Source`.
-//! * On each `Props` param change, we parse the SPA pod for
-//!   `channelVolumes[]` (cubic-curve linear floats, range 0..N) and `mute`,
-//!   compute the mean across channels, and push the (channel, value, muted)
-//!   tuple over an `mpsc::channel` to a worker thread that does the
-//!   blocking IPC send to awob-daemon.
-//!
-//! Per-channel listener_ids (`awob-listener-pipewire-speaker`,
-//! `awob-listener-pipewire-mic`) so the daemon's history map and
-//! duplicate-detector treat them as independent listeners — same shape as
-//! you'd get if these were two separate binaries.
+//! Per-channel listener_ids
+//! (`awob-listener-pipewire-{speaker,mic,app-out,app-in}`) keep the
+//! daemon's history and duplicate-detector treating each as independent.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -94,15 +84,9 @@ struct Cli {
     #[arg(long = "per-app-binary")]
     per_app_binaries: Vec<String>,
 
-    /// Suppress events from non-default audio devices. With this flag
-    /// set, the listener subscribes to PipeWire's `default` Metadata
-    /// object and forwards events only from the node whose `node.name`
-    /// matches the current `default.audio.sink` (for sinks) or
-    /// `default.audio.source` (for sources). Per-app streams are
-    /// unaffected — `--per-app` events still fire regardless. Useful
-    /// on multi-sink boxes where a Bluetooth headset's volume change
-    /// shouldn't fire an OSD if the speakers are still the active
-    /// output.
+    /// Forward events only from the current default sink/source (resolved
+    /// via PipeWire's `default` Metadata object). Per-app streams ignore
+    /// this filter.
     #[arg(long)]
     default_only: bool,
 }
@@ -139,10 +123,8 @@ pub fn emit_osd(
     };
     let listener_id = listener_id_for(channel, kind, source);
     let (default_icon, style) = pick_visuals(channel, state.value, state.muted);
-    // App streams: prefer the app's own icon (Spotify, Firefox, mpv) so
-    // the OSD reads as "Spotify changed volume" at a glance. The bar fill
-    // already conveys level. Device streams continue using the level-based
-    // audio-volume-* / microphone-* icons.
+    // App streams use the app's own icon; device streams use the
+    // level-based audio-volume-* / microphone-* icons.
     let icon: String = match icon_override {
         Some(i) if !i.is_empty() => i.to_string(),
         _ => default_icon.to_string(),
@@ -166,14 +148,7 @@ pub fn emit_osd(
     c.send(s.build())
 }
 
-/// Pick the OSD icon and style for a given (channel, value, muted).
-///
-/// Combined into one call because every emit uses both — splitting
-/// just doubles the cost of evaluating the same conditions and adds
-/// risk of the two falling out of sync when ranges change.
-///
-/// `value` is in 0..1 (or higher for boost) regardless of cubic /
-/// linear taper, so callers don't need to translate.
+/// `value` is 0..1 (or higher for boost). Returns `(icon, style)`.
 fn pick_visuals(ch: Channel, value: f64, muted: bool) -> (&'static str, &'static str) {
     if muted {
         let icon = match ch {
@@ -272,21 +247,11 @@ fn identity_for_device(props: &libspa::utils::dict::DictRef) -> Option<NodeIdent
     })
 }
 
-/// Build identity for an `Stream/Output/Audio` or `Stream/Input/Audio`
-/// node — i.e. an application stream rather than a physical device.
-///
-/// Source hash derives from `application.process.binary` (or
-/// `application.name`, or `node.name`) so the same app always gets the
-/// same source and the daemon can animate from its previous level.
-///
-/// Icon prefers `application.icon-name` (most apps set this — Spotify,
-/// Firefox, mpv all do). Falls back to `application.process.binary` which
-/// often matches a freedesktop icon name on disk. The daemon's icon
-/// resolver finds the SVG/PNG via the standard XDG icon search.
-///
-/// Allowlist filtering: if `binaries` is non-empty, the stream is only
-/// tracked when its `application.process.binary` matches one of the
-/// listed names (case-insensitive substring).
+/// Identity for an app stream (`Stream/{Output,Input}/Audio`).
+/// Source hash keys on `application.process.binary` (or `.name`, or
+/// `node.name`) so the same app keeps a stable source. Icon prefers
+/// `application.icon-name`. `binaries` is a case-insensitive substring
+/// allowlist on `application.process.binary` — empty allows all.
 fn identity_for_app(
     props: &libspa::utils::dict::DictRef,
     binaries: &[String],
@@ -321,8 +286,7 @@ fn identity_for_app(
         source: stable_node_hash(&key_for_hash),
         app,
         icon,
-        // App streams aren't subject to the --default-only filter — the
-        // default-device mechanic only applies to physical sinks/sources.
+        // None bypasses the --default-only filter (apps aren't devices).
         node_name: None,
     })
 }
@@ -449,26 +413,20 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     let registry = core.get_registry_rc()?;
     let registry_weak = registry.downgrade();
 
-    // Each Audio node we've bound. Map keyed by registry id so we can clean
-    // up on `global_remove`. Each binding carries its stable source hash
-    // (so the param closure can attach it to outgoing events).
+    // Map keyed by registry id for cleanup on `global_remove`.
     type NodeBinding = (pw::node::Node, pw::node::NodeListener);
     let bound_nodes: Rc<RefCell<HashMap<u32, NodeBinding>>> = Rc::new(RefCell::new(HashMap::new()));
     let last_state: Rc<RefCell<ChangeFilter<u32, AudioState>>> =
         Rc::new(RefCell::new(ChangeFilter::new()));
 
-    // The `default` Metadata object. Bound on first sight so we can
-    // observe `default.audio.sink` / `default.audio.source` updates
-    // when the user switches outputs. Held in a slot so the listener
-    // doesn't get dropped (the listener handle keeps the PipeWire
-    // subscription alive).
+    // Listener handle keeps the PipeWire subscription alive — must outlive
+    // the registration.
     type MetadataBinding = (pw::metadata::Metadata, pw::metadata::MetadataListener);
     let bound_metadata: Rc<RefCell<HashMap<u32, MetadataBinding>>> =
         Rc::new(RefCell::new(HashMap::new()));
 
-    // Current default sink/source `node.name` — `None` until the
-    // metadata listener fires its first property events. With
-    // `--default-only`, events from non-default nodes are dropped.
+    // `None` until the metadata listener fires; events from non-defaults
+    // are dropped under `--default-only`.
     #[derive(Default)]
     struct Defaults {
         sink: Option<String>,
@@ -491,11 +449,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     let _registry_listener = registry
         .add_listener_local()
         .global(move |obj| {
-            // Bind the `default` Metadata object so we can observe
-            // `default.audio.sink` / `default.audio.source` for the
-            // --default-only filter. We bind unconditionally because
-            // the cost is small and the user might toggle the filter
-            // via a future config-reload path.
+            // Bind unconditionally — the cost is small.
             if obj.type_ == ObjectType::Metadata {
                 let props = match obj.props {
                     Some(p) => p,
@@ -599,28 +553,21 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                         None => return,
                     };
                     if let Some(state) = parse_props_pod(pod) {
-                        // --default-only filter: only applies to physical
-                        // device nodes (sinks + sources). App streams
-                        // bypass — they don't participate in PipeWire's
-                        // default-device routing.
+                        // --default-only applies to devices only; app
+                        // streams bypass.
                         if default_only && matches!(kind, NodeKind::Device) {
                             let d = defaults_for_this_param.borrow();
                             let want = match channel {
                                 Channel::Speaker => d.sink.as_deref(),
                                 Channel::Mic => d.source.as_deref(),
                             };
-                            // No default known yet, or our node isn't
-                            // the active default → suppress.
                             if want.is_none() || identity.node_name.as_deref() != want {
                                 return;
                             }
                         }
-                        // First observation of this node is silently
-                        // seeded by ChangeFilter (PipeWire emits Props
-                        // synchronously on subscribe, so without this
-                        // every sink/source would fire an OSD on
-                        // daemon start). See aide decision
-                        // `awob-listener-startup-silent`.
+                        // ChangeFilter silently seeds — PipeWire emits Props
+                        // synchronously on subscribe, otherwise every node
+                        // would fire an OSD at daemon start.
                         if last_state_for_param.borrow_mut().changed(id, &state) {
                             let _ = tx_local.send(VolumeEvent {
                                 channel,

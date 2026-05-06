@@ -1,17 +1,8 @@
 //! tiny-skia rasterisation pass over a parsed [`Theme`].
 //!
-//! Resolves [`AttrValue`]s against [`Bindings`] and draws the result into a
-//! `tiny_skia::Pixmap`. The pixmap layout is BGRA premultiplied, suitable for
-//! handing to a Wayland `wl_shm` ARGB8888 buffer (Wayland's "ARGB8888" matches
-//! tiny-skia's BGRA-on-little-endian byte order).
-//!
-//! Visual polish in this initial implementation:
-//! * Real: rect (rounded), bar, fill colours, palette/style merging, layout.
-//! * Placeholder: text and image render as flat coloured rects sized to their
-//!   bounding box. Adding cosmic-text + resvg/png is a follow-up — the scene
-//!   tree, layout, and colour pipeline are already in place to plug them in.
-//!
-//! See `awob-renderer` decision for the architectural choice.
+//! Resolves [`AttrValue`]s against [`Bindings`] and draws into a
+//! `tiny_skia::Pixmap`. Output is BGRA premultiplied — matches Wayland's
+//! `wl_shm` ARGB8888 byte order on little-endian.
 
 use std::path::PathBuf;
 
@@ -305,9 +296,6 @@ fn blit_pixmap(dst: &mut Pixmap, src: &Pixmap, x: f32, y: f32) {
 }
 
 impl Renderer {
-    /// Render a `rect` element including its drop-shadow (if any). Shadow
-    /// goes down first so the rect's fill paints over it; the shadow mask
-    /// is cached on `self.shadows` keyed by `(w, h, radius, blur)`.
     fn draw_rect_with_shadow(
         &mut self,
         r: &RectEl,

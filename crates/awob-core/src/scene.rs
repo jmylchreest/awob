@@ -286,21 +286,14 @@ pub struct BarEl {
     /// `{$lastValue ?? $value}`, which collapses to no wedge when there's
     /// no prior value to compare to.
     pub from: Option<AttrValue>,
-    /// Signed percentage tint applied to `fill` to colour the transition
-    /// wedge. Negative = darker, positive = brighter, `0` = identical to
-    /// fill. The configured value is the *peak* tint at the start of the
-    /// value transition; it lerps to `0` over the transition so the wedge
-    /// fades to match the bar by the time it settles. Accepted forms:
-    /// `"-80%"`, `"40%"`, `"-0.8"`, `"0.4"`. Default: `-80%`. KDL key:
-    /// `transition`.
+    /// Peak tint applied to the wedge over `fill`; lerps to `0` over the
+    /// transition so the wedge fades into the bar. Negative = darker,
+    /// positive = brighter. Default `-80%`.
     pub transition: Option<AttrValue>,
-    /// Render the bar as `N` discrete cells separated by gaps, instead of
-    /// one continuous fill. Filled count is `progress * N`; the cell at
-    /// the progress boundary renders a fractional width so the animation
-    /// stays smooth. When unset, the bar uses the default continuous
-    /// fill. KDL key: `cells`.
+    /// Render the bar as `N` discrete cells separated by gaps. The cell at
+    /// the progress boundary renders fractionally so the animation stays
+    /// smooth. Unset = continuous fill.
     pub cells: Option<AttrValue>,
-    /// Pixel gap between cells in cell-mode. Ignored when `cells` is
-    /// unset. Default `2`. KDL key: `gap`.
+    /// Pixel gap between cells in cell-mode; ignored otherwise. Default `2`.
     pub gap: Option<AttrValue>,
 }

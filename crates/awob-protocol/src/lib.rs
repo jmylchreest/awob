@@ -76,18 +76,13 @@ pub enum Response {
 }
 
 /// One theme entry returned by `Request::ThemeList`. `name` is what
-/// you'd pass to `SetTheme`; `description` is best-effort metadata
-/// pulled from a sibling `manifest.toml` if present.
+/// you'd pass to `SetTheme`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ThemeInfo {
     pub name: String,
-    /// `true` if this theme is currently active in the daemon.
     pub active: bool,
-    /// `"embedded"` for the in-binary fallback; `"disk"` for any
-    /// theme loaded from the configured `themes_dir`.
+    /// `"embedded"` for the in-binary fallback, `"disk"` otherwise.
     pub source: String,
-    /// First non-empty value from the theme's `manifest.toml`'s
-    /// `description` key, or `None` if no manifest is present.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
 }
@@ -101,19 +96,15 @@ pub struct SendPayload {
     #[serde(default = "default_max")]
     pub max: f64,
 
-    /// Stable listener identity, e.g. `"awob-listener-pipewire"`. Defaults
-    /// in `awob-client` to the basename of the current executable when not
-    /// explicitly set. Multiple processes sending with the same
-    /// `listener_id` but different `source` get a duplicate-listener
-    /// warning logged by the daemon.
+    /// Stable listener identity, e.g. `"awob-listener-pipewire"`. Two
+    /// processes sending with the same `listener_id` and different `source`
+    /// trigger a duplicate-listener warning from the daemon.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub listener_id: Option<String>,
 
-    /// Per-process random suffix (typically 4-8 hex chars) that
-    /// distinguishes one running instance of a listener from another.
-    /// Together `(listener_id, source)` form the full unique session
-    /// identifier. The daemon's per-source history map is keyed by
-    /// `source` alone — see the `awob-protocol-shape` decision.
+    /// Per-process suffix distinguishing one running instance from another.
+    /// `(listener_id, source)` is the full session identity; the daemon's
+    /// history map keys by `(source, event)`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
 
@@ -135,21 +126,9 @@ pub struct SendPayload {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout_ms: Option<u32>,
 
-    /// Whether this send may interrupt an OSD that's currently displaying a
-    /// *different* `(source, event)` pair.
-    ///
-    /// * `true` — hot-swap: the daemon discards the visible OSD and renders
-    ///   this one immediately. Right for interactive, user-initiated changes
-    ///   (volume keys, brightness keys, mic-mute) where a stale battery bar
-    ///   shouldn't be allowed to swallow the user's input.
-    /// * `false` (default) — polite: if the active OSD is for a different
-    ///   `(source, event)`, this send is queued and rendered after the
-    ///   active cycle's fade-out. Right for ambient updates (battery,
-    ///   network state) that shouldn't pre-empt whatever the user is
-    ///   actively doing.
-    ///
-    /// Same `(source, event)` as the visible OSD is always treated as a
-    /// continuity update regardless of this flag.
+    /// `true` — hot-swap a visible OSD for a different `(source, event)`.
+    /// `false` (default) — queue until the active cycle's fade-out.
+    /// Same `(source, event)` is always continuity regardless of this flag.
     #[serde(default)]
     pub preempt: bool,
 }

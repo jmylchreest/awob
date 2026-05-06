@@ -44,10 +44,7 @@ enum Cmd {
         icon: Option<String>,
         #[arg(long = "timeout")]
         timeout_ms: Option<u32>,
-        /// Mark this send as user-interactive — hot-swap the active OSD
-        /// even if a different `(source, event)` is currently displayed.
-        /// Use for volume/brightness/mic-mute key presses. Without this
-        /// flag, the send waits for the active OSD to finish.
+        /// Hot-swap the active OSD instead of queueing behind it.
         #[arg(long)]
         preempt: bool,
     },
@@ -59,10 +56,7 @@ enum Cmd {
     /// Theme management.
     #[command(subcommand)]
     Theme(ThemeCmd),
-    /// Force-palette overlay control. Set or clear an overlay applied
-    /// after the active theme's own palette + styles, regardless of
-    /// what the theme itself imports. Lets you flip colour schemes
-    /// without editing the theme file.
+    /// Set or clear a palette overlay applied after the active theme.
     #[command(subcommand)]
     ForcePalette(ForcePaletteCmd),
     /// Print client + daemon version info.
@@ -107,11 +101,8 @@ fn run(cli: Cli) -> Result<(), awob_client::Error> {
             timeout_ms,
             preempt,
         } => {
-            // Don't auto-set listener_id for the CLI — each `awob send`
-            // invocation is a one-shot, not a long-running listener, and
-            // many sends from different keybinds would trigger spurious
-            // duplicate-listener warnings. Listener binaries set theirs
-            // explicitly via `awob-client::Send::listener_id(...)`.
+            // No auto listener_id for one-shot CLI sends — many keybinds
+            // would spuriously trip the daemon's duplicate detector.
             let mut b = Send::new(event, value);
             if let Some(s) = listener_id {
                 b = b.listener_id(s);

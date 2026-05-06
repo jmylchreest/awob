@@ -1,22 +1,9 @@
 //! awob backlight listener.
 //!
-//! Watches a sysfs backlight node (`/sys/class/backlight/<dev>/brightness`)
-//! via three additive wake sources — inotify + udev + adaptive sysfs
-//! polling — all feeding one mpsc channel. Auto-discovers a backlight
-//! device by scanning `/sys/class/backlight` if `--device` isn't
-//! passed.
-//!
-//! Mirrors `awob-listener-keyboard-backlight`. Display backlights are
-//! almost always changed via userspace `write()` (brightnessctl etc),
-//! so inotify is the hot path; udev + polling cover the rare path
-//! where firmware writes the cached sysfs value without firing
-//! `kernfs_notify()` (no machine has been observed doing this for the
-//! display backlight, but the kbd-backlight half taught us not to
-//! assume).
-//!
-//! Reads `max_brightness` from the same directory and forwards it as
-//! the send's `max`, so themes that show absolute values can do so
-//! faithfully.
+//! Watches `/sys/class/backlight/<dev>/brightness` via three additive
+//! wake sources (inotify + udev + polling) feeding one mpsc channel.
+//! Auto-discovers a device when `--device` isn't passed. Forwards
+//! `max_brightness` so themes can render absolute values.
 
 mod wayland_outputs;
 
@@ -49,23 +36,12 @@ struct Cli {
     #[arg(long)]
     source: Option<String>,
 
-    /// Friendly label shown in the OSD's `app` field. Overrides the
-    /// auto-detected name. Resolution order when unset:
-    ///
-    /// 1. `wl_output.make` + `wl_output.model` for the connector this
-    ///    backlight controls (e.g. `"BOE NE135A1M-NY1"`),
-    /// 2. heuristic from the connector type (`"Display"` for `eDP-*`,
-    ///    `"External Display"` for HDMI/DP),
-    /// 3. the raw sysfs device name.
+    /// Friendly label for the OSD's `app` field; overrides auto-detection.
     #[arg(long)]
     label: Option<String>,
 
-    /// Polling interval in milliseconds for the sysfs brightness
-    /// re-read. inotify covers most display backlights (because every
-    /// brightness change is a userspace write — brightnessctl etc),
-    /// but on hardware where the firmware updates sysfs directly the
-    /// poll is the only signal. This is the worst-case OSD latency on
-    /// such hardware.
+    /// sysfs poll interval in ms — worst-case OSD latency on hardware
+    /// where neither inotify nor udev fires.
     #[arg(long, default_value_t = 250, value_parser = clap::value_parser!(u64).range(100..=2000))]
     poll_interval: u64,
 }
@@ -124,17 +100,12 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| "backlight".into());
-    // Stable source — same device, same source across restarts. No PID
-    // suffix so the daemon sees the same source on respawn (no spurious
-    // duplicate-listener warning).
+    // No PID suffix — same device collapses to the same source across
+    // restarts (no duplicate-listener warning on respawn).
     let source = cli
         .source
         .unwrap_or_else(|| format!("backlight-{}", sanitise_device(&device_name)));
 
-    // Friendly label. If user passed --label, use it. Otherwise probe
-    // Wayland outputs and match the backlight's connector to one. Fall
-    // back to a heuristic from the connector name, then to the raw sysfs
-    // device name.
     let connector = read_connector(&dir);
     let label = match cli.label {
         Some(l) => l,
@@ -183,10 +154,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             }
         })?;
 
-    // Source 3 — polling fall-through, expressed as the recv_timeout
-    // below. Backstop for hardware where neither inotify nor udev
-    // fires (rare for display backlights — most are driven by
-    // userspace tools that always fire inotify).
+    // Source 3 — polling, expressed as the recv_timeout below.
     let poll_interval = Duration::from_millis(cli.poll_interval);
 
     let mut filter: ChangeFilter<(), u32> = ChangeFilter::new();
@@ -194,19 +162,15 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     loop {
         match rx.recv_timeout(poll_interval) {
             Ok(()) => {
-                // Debounce a burst (sysfs can fire several events per change).
+                // Coalesce a burst — sysfs can fire several events per change.
                 std::thread::sleep(debounce);
                 while rx.try_recv().is_ok() {}
             }
-            Err(mpsc::RecvTimeoutError::Timeout) => {
-                // No wake; polling path.
-            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
         }
-        // Skip the cycle on a transient read failure rather than
-        // inventing a `0` value — feeding 0 into ChangeFilter would
-        // emit a spurious "brightness=0%" OSD on the next-recovered
-        // read.
+        // Skip on transient read failure — a `0` would otherwise emit a
+        // spurious "brightness=0%" OSD before the next good read.
         let Ok(current) = read_u32(&brightness_path) else {
             continue;
         };
@@ -224,10 +188,6 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// Subscribe to udev `change` events on the `backlight` subsystem and
-/// forward each one matching our device into the wake channel.
-/// Returns when the channel is dropped (main loop exited) or on a
-/// fatal udev error.
 fn run_udev(want_device: &str, tx: mpsc::Sender<()>) -> Result<(), Box<dyn std::error::Error>> {
     let monitor = udev::MonitorBuilder::new()?
         .match_subsystem("backlight")?

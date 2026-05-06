@@ -27,11 +27,9 @@ pub struct Supervisor {
 struct ChildState {
     config: ListenerConfig,
     process: Option<Child>,
-    /// Index into [`BACKOFF_MS`] tracking how many failures in a row.
+    /// Index into [`BACKOFF_MS`].
     backoff_idx: usize,
-    /// When the next respawn attempt is allowed.
     next_attempt_at: Instant,
-    /// Whether to give up restarting (after a `Never` policy hit a clean exit).
     stopped: bool,
 }
 
@@ -59,8 +57,6 @@ impl Supervisor {
         }
     }
 
-    /// Poll all children: collect any that have exited, decide whether to
-    /// respawn per their policy, and respawn now if backoff has elapsed.
     pub fn tick(&mut self, socket_path: Option<&PathBuf>) {
         let now = Instant::now();
         for (name, state) in self.children.iter_mut() {
@@ -68,7 +64,6 @@ impl Supervisor {
                 continue;
             }
 
-            // Reap exited children.
             let exited = if let Some(p) = state.process.as_mut() {
                 match p.try_wait() {
                     Ok(Some(status)) => Some(status),
@@ -115,7 +110,6 @@ impl Supervisor {
                 }
             }
 
-            // Spawn (or re-spawn) when its backoff window has passed.
             if state.process.is_none() && !state.stopped && now >= state.next_attempt_at {
                 spawn_child(state, socket_path);
             }

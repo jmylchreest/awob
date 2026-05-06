@@ -56,12 +56,8 @@ impl Value {
     }
 }
 
-/// Expression evaluation context.
-///
-/// Holds:
-/// * `vars` — runtime values populated per send (`value`, `lastValue`, `event`, …).
-/// * `palette` — named colours from the theme palette block, looked up via
-///   `$name` when the var lookup misses.
+/// Expression evaluation context — runtime `vars` and theme `palette`.
+/// `$name` resolves first against `vars`, then falls back to `palette`.
 #[derive(Debug, Clone, Default)]
 pub struct Bindings {
     pub vars: HashMap<String, Value>,

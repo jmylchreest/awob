@@ -1,17 +1,6 @@
 //! Helpers for building well-behaved awob listeners.
-//!
-//! Codifies two policies every in-tree listener already implements by
-//! hand:
-//!
-//! 1. **Silent on first observation** — listeners must not fire OSDs
-//!    when they start. See [`ChangeFilter`].
-//! 2. **Wait + rescan on no resource** — if the upstream resource is
-//!    absent, log once and poll for it instead of exiting. See
-//!    [`wait_for_resource`].
-//!
-//! Both helpers are wakeup-agnostic: they sit downstream of however
-//! the listener gets its events (inotify, udev, poll timer, native
-//! callback) and only know about *values* and *resource presence*.
+//! [`ChangeFilter`] silences the first observation of each key;
+//! [`wait_for_resource`] polls for an absent upstream instead of exiting.
 
 use std::collections::HashMap;
 use std::hash::Hash;
@@ -68,9 +57,8 @@ where
         }
     }
 
-    /// Returns `true` only if `value` differs from the last value
-    /// seen for `key`. First observation always returns `false` and
-    /// silently seeds the filter. Updates the seed on real change.
+    /// First observation returns `false` and silently seeds.
+    /// Subsequent calls return `true` only when `value` differs.
     pub fn changed(&mut self, key: K, value: &V) -> bool {
         match self.last.get(&key) {
             Some(prev) if prev == value => false,

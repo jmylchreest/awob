@@ -33,23 +33,16 @@ struct Cli {
     socket: Option<PathBuf>,
 
     /// Path to an awob.toml config file. Defaults to $XDG_CONFIG_HOME/awob/awob.toml.
-    /// Listeners declared in `[[listeners]]` are spawned + supervised by the
-    /// daemon. CLI flags override values in the config file.
     #[arg(long)]
     config: Option<PathBuf>,
 
-    /// Render-only mode: process incoming sends, log a one-line "would render"
-    /// summary, but do NOT open a Wayland surface. Useful for headless smoke
-    /// tests and debugging the IPC + scene engine without a compositor.
+    /// Render-only mode: log a one-line "would render" summary instead of
+    /// opening a Wayland surface.
     #[arg(long)]
     no_surface: bool,
 
-    /// Late-import a palette overlay applied AFTER the theme's own
-    /// imports + inline `palette { … }`. Lets you change the colours
-    /// of any theme without editing it. The file is added to the
-    /// hot-reload watch list, so saving the overlay refreshes
-    /// instantly. Accepts the same KDL syntax as
-    /// `themes/_palettes/<name>.kdl`.
+    /// Late-import a palette overlay applied AFTER the theme's own imports
+    /// and inline `palette { … }`. Hot-reloaded.
     #[arg(long)]
     force_palette: Option<PathBuf>,
 }
@@ -60,13 +53,9 @@ struct Shared {
     themes_root: Option<PathBuf>,
     surface: Option<wayland::SurfaceHandle>,
     watcher: Option<watcher::ThemeWatcher>,
-    /// Path to `awob.toml` if one is in effect — explicit `--config`,
-    /// otherwise the XDG default (`$XDG_CONFIG_HOME/awob/awob.toml`).
-    /// Used as the rewrite target when a client passes `persist=true` to
-    /// `SetTheme`. `None` if no config path could be determined.
+    /// Active `awob.toml` path; rewrite target for `SetTheme { persist: true }`.
     config_path: Option<PathBuf>,
-    /// Late palette overlay applied after every theme load (initial,
-    /// `SetTheme`, `Reload`, hot-reload). See `Cli::force_palette`.
+    /// Late palette overlay reapplied on every theme (re)load.
     force_palette: Option<PathBuf>,
 }
 
@@ -116,11 +105,8 @@ impl Shared {
                 let mut bindings =
                     awob_core::bindings::build(&payload, last_value, last_max, last_seen);
                 bindings.palette = self.theme.theme.palette.clone();
-                // Auto-detect wob's overflow state: value > max forces
-                // the `overflow` style regardless of what the sender
-                // asked for. Themes that don't define an `overflow`
-                // style block silently no-op (apply_style is lenient
-                // on missing names) so this is backwards-compatible.
+                // value > max forces `overflow` regardless of payload.style.
+                // Themes without an `overflow` block silently no-op.
                 let style_to_apply: &str = if payload.value > payload.max {
                     "overflow"
                 } else {
@@ -145,9 +131,6 @@ impl Shared {
                 );
                 tracing::debug!("{summary}");
                 if let Some(handle) = &self.surface {
-                    // The wayland thread takes ownership of theme + bindings
-                    // for the lifetime of the cycle so it can re-render every
-                    // frame with an interpolated `value`.
                     let mut theme = self.theme.theme.clone();
                     if let Some(ms) = payload.timeout_ms {
                         theme.surface.show = std::time::Duration::from_millis(ms as u64);
@@ -169,10 +152,7 @@ impl Shared {
                 Response::Ok
             }
             Request::Query { source } => {
-                // History is now (source, event)-keyed, so a single source
-                // may produce multiple entries — one per distinct event.
-                // Filter at iterate time when a source is named, otherwise
-                // emit everything.
+                // One source may have multiple events; filter at iterate time.
                 let mut entries = Vec::new();
                 for (src, _evt, e) in self.history.entries() {
                     if let Some(filter) = source.as_deref()
@@ -193,17 +173,13 @@ impl Shared {
                     Ok(t) => {
                         self.theme = t;
                         self.rewatch();
-                        // Push the new theme to the wayland thread so
-                        // a currently-visible OSD redraws with it
-                        // instead of waiting for the next send.
                         if let Some(handle) = &self.surface {
                             handle.retheme(self.theme.theme.clone(), self.theme.source_dir.clone());
                         }
                         if persist {
                             if let Some(path) = &self.config_path {
                                 if let Err(e) = persist_theme_to_config(path, &name) {
-                                    // Non-fatal: the theme is active in
-                                    // memory, persistence just didn't take.
+                                    // Non-fatal: theme is live, just not persisted.
                                     return Response::Error {
                                         message: format!(
                                             "theme set in memory but persisting to {}: {e}",
@@ -340,10 +316,7 @@ fn enumerate_themes(
     out
 }
 
-/// Pull `description` out of a theme's `manifest.toml`. Returns
-/// `None` for any failure mode (missing file, unreadable, malformed,
-/// no `description` key, empty value) — the manifest is
-/// best-effort metadata, never a load-blocking concern.
+/// Pull `description` from a theme's `manifest.toml`. `None` on any failure.
 fn read_manifest_description(path: &Path) -> Option<String> {
     let raw = std::fs::read_to_string(path).ok()?;
     let parsed: toml::Value = toml::from_str(&raw).ok()?;
@@ -516,13 +489,13 @@ fn lock_or_recover<'a, T>(m: &'a Mutex<T>, label: &str) -> MutexGuard<'a, T> {
 }
 
 fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
-    // Load config file (explicit path > XDG default > none).
+    // Config precedence: explicit --config > XDG default > none.
     let file_config: config::AwobConfig = match &cli.config {
         Some(p) => config::AwobConfig::load(p)?,
         None => config::AwobConfig::load_default()?.unwrap_or_default(),
     };
 
-    // CLI flags override file values.
+    // CLI flags override file values throughout.
     let theme_name = cli
         .theme
         .clone()
@@ -539,12 +512,8 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         })
         .or_else(default_themes_dir);
 
-    // Force-palette overlay. CLI flag wins; otherwise read from
-    // `awob.toml`'s `force_palette` key with `$VAR` / `~/` expansion
-    // so users can write `force_palette = "~/.config/awob/overlay.kdl"`
-    // and have it Just Work. When set, the loader applies it last so
-    // it wins per the existing palette merge rule, and adds it to
-    // the watch list so saving the file hot-reloads.
+    // CLI flag wins, then `force_palette` from awob.toml with `$VAR` / `~/`
+    // expansion. Loader merges it last and adds it to the hot-reload list.
     let force_palette: Option<PathBuf> = cli.force_palette.clone().or_else(|| {
         file_config
             .force_palette
@@ -552,11 +521,8 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             .map(awob_core::paths::expand_config_path)
     });
 
-    // Cold-start fallback: if the configured theme can't be loaded (missing
-    // directory, parse error, etc.), warn loudly but come up with the
-    // embedded default so the user still sees an OSD and can recover via
-    // `awob set-theme <name>`. Refusing to start would leave them with no
-    // OSD and no way to drive the daemon to fix it.
+    // Cold-start fallback to embedded default — refusing to start would
+    // strand the user with no OSD and no way to drive the daemon to recover.
     let initial = match theme_loader::load(
         themes_root.as_deref(),
         &theme_name,
@@ -642,14 +608,11 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         );
     }
 
-    // Hot-reload worker.
     {
         let shared = Arc::clone(&shared);
         thread::spawn(move || {
             while reload_rx.recv().is_ok() {
-                // Debounce: drain any further events that arrive in the
-                // next 80ms. Editors and IDEs commonly emit 3-5 modify
-                // events per save.
+                // Debounce 80ms — editors emit 3-5 modify events per save.
                 let deadline = std::time::Instant::now() + std::time::Duration::from_millis(80);
                 while let Some(remaining) =
                     deadline.checked_duration_since(std::time::Instant::now())
@@ -666,10 +629,6 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                     Ok(t) => {
                         s.theme = t;
                         s.rewatch();
-                        // Push the freshly-parsed theme to the wayland
-                        // thread so a visible OSD redraws with the new
-                        // colours / layout instantly. Idle surface
-                        // ignores the message.
                         if let Some(handle) = &s.surface {
                             handle.retheme(s.theme.theme.clone(), s.theme.source_dir.clone());
                         }
@@ -686,10 +645,6 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
 
     let listener = server.try_clone_listener()?;
 
-    // Build the effective listener list and hand it to the supervisor.
-    // Explicit `[[listeners]]` win over auto-discovered ones with the
-    // same name; auto-discovery walks `KNOWN_LISTENERS` and pulls in any
-    // whose binary is on disk and isn't named in `supervisor.disable`.
     let effective = build_effective_listeners(&file_config);
     let mut sup = supervisor::Supervisor::new();
     if !effective.is_empty() {
@@ -698,7 +653,6 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     }
     let sup = Arc::new(Mutex::new(sup));
 
-    // Background tick loop polling supervised children.
     {
         let sup = Arc::clone(&sup);
         let socket_for_sup = server.path().to_path_buf();
@@ -710,7 +664,6 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
-    // Catch SIGINT/SIGTERM and shut children down cleanly.
     {
         let sup = Arc::clone(&sup);
         thread::spawn(move || {

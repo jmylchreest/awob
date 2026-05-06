@@ -25,14 +25,10 @@ pub struct Entry {
 
 #[derive(Debug, Default)]
 pub struct History {
-    /// Two-level map: `source -> event -> Entry`. Lookup uses native
-    /// HashMap borrow rules so callers can pass `&str` for both keys.
     by_source: HashMap<String, HashMap<String, Entry>>,
-    /// Reverse index: listener_id → set of distinct source IDs currently
-    /// active. Each (listener_id, source) is treated as one independent
-    /// listener instance. Multiple events under one (listener_id, source)
-    /// are not flagged — that's just one process publishing multiple
-    /// metrics for the same node.
+    /// listener_id → set of source IDs. Each (listener_id, source) is one
+    /// independent listener instance; multiple events under one pair are
+    /// the same process publishing multiple metrics for the same node.
     by_listener: HashMap<String, HashSet<String>>,
 }
 
@@ -81,16 +77,13 @@ impl History {
         outcome
     }
 
-    /// Look up the last recorded entry for `(source, event)`. Returns
-    /// `None` if either is unknown.
     pub fn get(&self, source: &str, event: &str) -> Option<&Entry> {
         self.by_source.get(source).and_then(|m| m.get(event))
     }
 
     pub fn evict_expired(&mut self) {
         let now = Instant::now();
-        // Collect stale `(source, event, listener_id)` triples first to
-        // avoid mutating while iterating.
+        // Collect first so we can mutate after the borrow ends.
         let mut stale: Vec<(String, String, Option<String>)> = Vec::new();
         for (src, events) in &self.by_source {
             for (evt, entry) in events {
@@ -119,7 +112,6 @@ impl History {
         }
     }
 
-    /// Iterate every `(source, event, entry)` triple in the map.
     pub fn entries(&self) -> impl Iterator<Item = (&String, &String, &Entry)> {
         self.by_source
             .iter()
@@ -255,8 +247,6 @@ mod tests {
 
     #[test]
     fn multiple_events_one_source_one_listener_no_duplicate() {
-        // One PipeWire process publishing both `volume` and `mute` for the
-        // same source must not be flagged as a duplicate listener.
         let mut h = History::new();
         let r1 = h.record(
             "speaker",

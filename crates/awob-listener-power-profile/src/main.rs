@@ -1,20 +1,8 @@
 //! awob power-profile listener.
 //!
-//! Watches `/sys/firmware/acpi/platform_profile` for changes — the
-//! kernel-exposed attribute that `power-profiles-daemon` and
-//! `tuned` proxy via D-Bus. Emits an OSD whenever the active profile
-//! changes (`performance` / `balanced` / `low-power` / `quiet` /
-//! `cool` / etc., depending on the platform driver).
-//!
-//! Why sysfs and not D-Bus? The kernel attribute is the source of
-//! truth on every modern laptop that exposes a platform profile
-//! (Framework via `amd_pmf`, ThinkPad via `thinkpad_acpi`, most
-//! Intel/AMD laptops via firmware DPTF). PPD and tuned both proxy
-//! it. Reading sysfs directly avoids the D-Bus hop and the zbus
-//! dependency. On laptops without `platform_profile`, the listener
-//! sits in its standard wait-for-device loop — same graceful
-//! behaviour as the battery/backlight listeners on hardware they
-//! don't apply to.
+//! Watches `/sys/firmware/acpi/platform_profile` — the kernel attribute
+//! that PPD and tuned proxy via D-Bus. Reading sysfs directly avoids the
+//! D-Bus hop and the zbus dependency.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -30,9 +18,6 @@ const PROFILE_PATH: &str = "/sys/firmware/acpi/platform_profile";
 const LISTENER_ID: &str = "awob-listener-power-profile";
 const SOURCE: &str = "power-profile";
 
-/// Re-scan cadence when the platform_profile attribute is absent (e.g.
-/// older laptops or virtual machines without ACPI DPTF). Same 60 s
-/// pattern the battery / backlight / kbd-backlight listeners use.
 const NO_DEVICE_RESCAN: Duration = Duration::from_secs(60);
 
 #[derive(Parser, Debug)]
@@ -44,19 +29,12 @@ struct Cli {
     #[arg(long)]
     socket: Option<PathBuf>,
 
-    /// Polling interval in milliseconds for the sysfs re-read backstop.
-    /// inotify is the hot path on every kernel that calls `kernfs_notify`
-    /// on the attribute (which is most of them); polling is the
-    /// safety net.
+    /// sysfs poll backstop in ms — inotify is the hot path on kernels that
+    /// call `kernfs_notify` on the attribute.
     #[arg(long, default_value_t = 250, value_parser = clap::value_parser!(u64).range(100..=2000))]
     poll_interval: u64,
 }
 
-/// Block until `/sys/firmware/acpi/platform_profile` exists. On a
-/// machine that doesn't expose it (older laptops, VMs) this loops
-/// forever at NO_DEVICE_RESCAN cadence. Hot-plug isn't really a
-/// thing for ACPI firmware, but the loop keeps shape consistent
-/// with the other listeners.
 fn wait_for_attribute() -> PathBuf {
     wait_for_resource(
         || {
@@ -130,9 +108,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     let path = wait_for_attribute();
     tracing::info!("source={SOURCE} path={}", path.display());
 
-    // inotify on the attribute. Wakes the loop on writes from PPD,
-    // tuned, the user echoing into it, ACPI hotkeys handled in
-    // userspace, etc.
+    // inotify wakes on every write to the attribute.
     let (tx, rx) = mpsc::channel::<()>();
     let inotify_tx = tx.clone();
     let mut watcher = notify::recommended_watcher(move |res: notify::Result<Event>| {

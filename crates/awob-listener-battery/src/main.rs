@@ -31,10 +31,7 @@ use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
 
 const LISTENER_ID: &str = "awob-listener-battery";
 const SYSFS_ROOT: &str = "/sys/class/power_supply";
-/// Re-read everything every minute regardless of uevents — a backstop
-/// against any missed events. The kernel does fire uevents reliably for
-/// the changes we care about, but a periodic refresh costs nothing and
-/// keeps the OSD in sync with reality even after a suspend / resume.
+/// 60s backstop against missed events and post-suspend drift.
 const RESCAN_INTERVAL: Duration = Duration::from_secs(60);
 
 /// After any power_supply uevent, poll sysfs at this cadence for
@@ -249,20 +246,9 @@ fn read_f64(p: &Path) -> Option<f64> {
     }
 }
 
-/// Re-scan cadence when no devices are present yet. Runs forever in the
-/// background of an otherwise-idle desktop where no battery exists,
-/// catching hot-plug additions cheaply (one [`std::fs::read_dir`] per
-/// minute). 60 s rather than something faster because batteries
-/// don't appear/disappear meaningfully often.
+/// 60s cadence — batteries don't appear/disappear meaningfully often.
 const NO_DEVICE_RESCAN: Duration = Duration::from_secs(60);
 
-/// Block until at least one battery is discoverable. On a desktop with
-/// no battery this loops forever at [`NO_DEVICE_RESCAN`] cadence; on a
-/// laptop the first scan succeeds immediately.
-///
-/// Logs the "no batteries" state once at INFO so it's visible in the
-/// journal without spamming on every retry. Subsequent quiet retries
-/// stay at DEBUG.
 fn wait_for_batteries() -> Vec<PathBuf> {
     wait_for_resource(
         || {
@@ -490,8 +476,6 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         tracing::info!("battery: {}", b.display());
     }
 
-    // Subscribe to power_supply uevents. Captures AC plug, battery
-    // state transitions, and capacity threshold crossings instantly.
     let monitor = udev::MonitorBuilder::new()?
         .match_subsystem("power_supply")?
         .listen()?;
@@ -512,8 +496,6 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     // driver lags AC plug events.
     let mut burst_until: Option<Instant> = None;
 
-    // Seed the cache from sysfs and record the baseline (no OSD on
-    // first observation — see `evaluate_and_emit`).
     refresh_cache_from_sysfs(&mut cache, &batteries);
     evaluate_and_emit(
         &cache,
@@ -637,10 +619,8 @@ fn update_cache_from_event(
     true
 }
 
-/// Capacity thresholds that fire an OSD when crossed in either
-/// Parse the `--alert-bands` argument into a set of band names.
-/// Recognises every band name from [`BANDS`] plus `all` (every band)
-/// and `none` (only state transitions fire).
+/// Parse `--alert-bands` into a set of band names from [`BANDS`].
+/// `all` selects every band; `none` clears the set.
 fn parse_alert_bands(arg: &str) -> HashSet<&'static str> {
     let mut out = HashSet::new();
     for token in arg.split(',') {
@@ -655,8 +635,6 @@ fn parse_alert_bands(arg: &str) -> HashSet<&'static str> {
             continue;
         }
         if t.eq_ignore_ascii_case("none") {
-            // Explicit "no bands" — caller will only see OSDs on
-            // state transitions. Returning an empty set conveys that.
             out.clear();
             return out;
         }
@@ -669,41 +647,10 @@ fn parse_alert_bands(arg: &str) -> HashSet<&'static str> {
     out
 }
 
-/// Decide whether the latest aggregated battery reading deserves an
-/// OSD, and emit one if so.
-///
-/// Fires when:
-/// * the dominant state changed (Discharging↔Charging↔FullyCharged↔…), or
-/// * we are **discharging** AND capacity entered a new band whose name
-///   is in `alert_bands`.
-///
-/// Why band crossings only fire while discharging: bands encode
-/// urgency — `caution`, `low`, `empty`. While the battery is plugged
-/// in (Charging, FullyCharged, PendingCharge, PendingDischarge) those
-/// bands are not warnings; surfacing them is just noise. The visual
-/// layer (`pick_visuals`) already collapses the style to `normal`
-/// while charging, so the OSD that *would* fire would carry no
-/// urgency anyway. Skipping it entirely matches what the user expects
-/// from a battery indicator: state transitions are events; band
-/// crossings are warnings, and warnings only matter while draining.
-///
-/// "Discharging from 87 % to 21 %" is silent unless `low` and/or
-/// `caution` are in `alert_bands` — only band entries we explicitly
-/// asked about and state transitions surface as OSDs.
-///
-/// On the first call (`*last == None`) the function records the
-/// current state and band as a baseline *without* firing. That keeps
-/// the listener silent on startup / supervisor respawn — matching
-/// pipewire / backlight / keyboard-backlight, which only fire on real
-/// changes. Without this the user would see a "discharging at 73 %"
-/// OSD every time the daemon was restarted, which is just noise.
-/// Pure decision: should the (state, band) pair we just observed
-/// trigger an OSD given the previous (state, band) and the user's
-/// `--alert-bands` selection?
-///
-/// Split out from `evaluate_and_emit` so it's testable without a real
-/// socket. See that function's doc-comment for the policy this
-/// implements.
+/// Fires on state change OR (discharging AND new band in `alert_bands`).
+/// Bands encode urgency, which is only meaningful while draining; charging
+/// transitions are events worth seeing in their own right.
+/// First observation silently seeds (no OSD on startup / respawn).
 fn should_fire(
     prev: Option<(BatteryState, &'static str)>,
     state: BatteryState,
@@ -711,7 +658,6 @@ fn should_fire(
     alert_bands: &HashSet<&'static str>,
 ) -> bool {
     let Some((prev_state, prev_band_name)) = prev else {
-        // First observation: silently baseline.
         return false;
     };
     let state_changed = prev_state != state;

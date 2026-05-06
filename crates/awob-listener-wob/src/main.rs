@@ -1,12 +1,8 @@
 //! awob wob-FIFO compatibility shim.
 //!
-//! Creates a wob-format named pipe (default `$XDG_RUNTIME_DIR/wob.sock`) and
-//! translates incoming `<value> [<max>] [<style>]` lines into awob IPC sends.
-//! Intended as a drop-in replacement for `tail -f $WOB_SOCK | wob` style
-//! consumers — your existing scripts that `echo 50 > $XDG_RUNTIME_DIR/wob.sock`
-//! keep working unmodified.
-//!
-//! See workspace decision `awob-wob-compat`.
+//! Creates a wob-format named pipe (default `$XDG_RUNTIME_DIR/wob.sock`)
+//! and translates `<value> [<max>] [<style>]` lines into awob IPC sends.
+//! Drop-in for existing `echo 50 > $WOB_SOCK` scripts.
 
 use std::io::{BufRead, BufReader};
 use std::os::fd::AsRawFd;
@@ -94,11 +90,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!("source={source}");
 
     let socket = cli.socket.as_deref();
-    // Hold the daemon connection across lines. Scripts that fan out
-    // many `echo N > $WOB_SOCK` writes in quick succession would
-    // otherwise force a connect / disconnect per line. On any send
-    // error we drop the connection and reconnect lazily on the next
-    // line.
+    // Hold the connection across lines; reconnect lazily on send error.
     let mut client: Option<Client> = None;
 
     loop {
@@ -132,9 +124,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             let mut s = Send::new(&cli.event, value)
                 .listener_id("awob-listener-wob")
                 .source(&source)
-                // wob FIFO writers are user-driven scripts. The
-                // expectation when something writes a volume value is
-                // that it shows up immediately, not queued.
+                // wob writers are user-driven; show immediately, don't queue.
                 .preempt(true);
             if let Some(m) = max {
                 s = s.max(m);
@@ -155,7 +145,6 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 && let Err(e) = c.send(s.build())
             {
                 tracing::info!("send: {e}");
-                // Drop the connection so the next line reconnects.
                 client = None;
             }
         }

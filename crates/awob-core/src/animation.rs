@@ -1,81 +1,44 @@
 //! Per-element time-driven animations evaluated each frame during the
-//! `show` window.
-//!
-//! Today's public-facing API is a small set of element attributes
-//! (`pulse=true`, `pulse-rate="1Hz"`, `pulse-depth="40%"`) that desugar
-//! to one [`ElementAnimation`]. The engine is intentionally
-//! DSL-shaped so the eventual `@animate` blocks (FUTURES tier 2)
-//! parse into the same struct without renderer changes — adding new
-//! property variants, curves, and loop modes is purely additive.
-//!
-//! The renderer applies each animation to a per-frame `RenderState`
-//! via [`ElementAnimation::evaluate`], called with the elapsed time
-//! since the start of the show phase.
+//! `show` window. The pulse attribute family (`pulse=true`,
+//! `pulse-rate=…`, `pulse-depth=…`) desugars to one [`ElementAnimation`].
 
 use std::time::Duration;
 
-/// What an animation modulates on the element it's attached to.
-///
-/// Today only [`AnimProperty::Alpha`] is wired through the renderer
-/// (multiplied into the element's final colour alpha). Future
-/// tier-2 work adds Scale, Translate, and Color — same engine, more
-/// `match` arms in the renderer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AnimProperty {
-    /// Multiply into the element's per-frame alpha. 0.0 = fully
-    /// transparent, 1.0 = fully opaque (no modulation).
     Alpha,
 }
 
-/// Easing curve mapping linear time progress (0..1) to an output
-/// progress (0..1). Curves can overshoot 0..1 if the visual effect
-/// calls for it; today's pulse uses `SineInOut` which stays within
-/// the unit interval.
+/// Easing curve mapping linear time progress to output progress.
+/// Curves may overshoot 0..1 if the effect calls for it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AnimCurve {
-    /// `t` (no easing).
     Linear,
-    /// `0.5 - 0.5 * cos(πt)` — symmetric, smooth at both ends. Makes
-    /// `Alpha` pulses look organic rather than clipped.
+    /// `0.5 - 0.5 * cos(πt)` — symmetric, smooth at both ends.
     SineInOut,
 }
 
-/// What happens when the animation reaches the end of its duration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LoopMode {
-    /// Plays once, then snaps to the `to` value.
     Once,
-    /// Restarts from the beginning. Each iteration runs `from → to`.
     Loop,
-    /// Runs `from → to → from → to → ...`. Each full cycle is
-    /// `2 * duration`.
+    /// `from → to → from → to → ...` — full cycle is `2 * duration`.
     PingPong,
 }
 
-/// One animation slot on an element. An element may carry multiple
-/// independent animations (e.g. a future `breathe` that pulses both
-/// Alpha and Scale at slightly different rates).
 #[derive(Debug, Clone, PartialEq)]
 pub struct ElementAnimation {
     pub target: AnimProperty,
     pub curve: AnimCurve,
-    /// Output value at progress 0.0.
     pub from: f32,
-    /// Output value at progress 1.0.
     pub to: f32,
-    /// Time for one half-cycle (`from → to`). Total cycle in
-    /// `PingPong` mode is `2 * duration`.
+    /// Time for one half-cycle (`from → to`).
     pub duration: Duration,
     pub loop_mode: LoopMode,
-    /// Time before the animation starts evaluating (returns `from`
-    /// for `t < delay`).
     pub delay: Duration,
 }
 
 impl ElementAnimation {
-    /// Evaluate the animation at elapsed-show-time `t`. Returns the
-    /// scalar value to feed into the renderer's `RenderState`
-    /// mutation logic.
     pub fn evaluate(&self, t: Duration) -> f32 {
         if t < self.delay {
             return self.from;
@@ -102,8 +65,7 @@ impl ElementAnimation {
         self.from + (self.to - self.from) * eased
     }
 
-    /// True if the animation has finished and won't change again.
-    /// Only `Once` mode reaches this state; loops never finish.
+    /// Only reachable in `Once` mode; loops never finish.
     pub fn is_done(&self, t: Duration) -> bool {
         match self.loop_mode {
             LoopMode::Once => t >= self.delay + self.duration,
