@@ -193,7 +193,7 @@ D-Bus. The closest approximations:
   carries OSD-relevant hints — `value` (de-facto progress hint, int 0–100),
   `urgency`, `transient`, `x-canonical-private-synchronous` — but you can
   only consume them by **owning the bus name**, which conflicts with
-  dunst/mako/fnott/swaync. There is no passive listener path.
+  histui/dunst/mako/fnott/swaync. There is no passive listener path.
 * `org.kde.osdService` (KDE Plasma–internal RPC) — `showText`,
   `showProgress`, `volumeChanged`, `brightnessChanged`,
   `kbdLayoutChanged`, … — is a *callee* interface used only by Plasma
@@ -205,7 +205,7 @@ D-Bus. The closest approximations:
 Two opt-in modes are worth considering if there's user demand:
 
 1. **`org.freedesktop.Notifications` server compat mode** — awob owns the
-   bus name (mutually exclusive with dunst/mako). It treats any incoming
+   bus name (mutually exclusive with histui/dunst/mako). It treats any incoming
    `Notify` whose hints contain `value` (int) **or**
    `x-canonical-private-synchronous` **or** `transient=true` with a numeric
    value as an OSD bar event; everything else either gets dropped or
