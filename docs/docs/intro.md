@@ -41,7 +41,8 @@ Three things wob doesn't do that some users want:
   Windows. The renderer assumes `wlr-layer-shell-v1`.
 * **A notification daemon.** OSDs and notification bubbles are
   different things. awob is the OSD; pair it with mako / dunst /
-  swaync for notifications.
+  swaync / [histui](https://github.com/jmylchreest/histui) for
+  notifications.
 * **Tiny.** wob is ~25 KB stripped; awob's daemon is ~4.5 MB.
   That's the cost of cosmic-text + tiny-skia + resvg + the listener
   supervisor. If a 5 MB daemon offends you, use wob.
