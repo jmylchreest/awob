@@ -193,7 +193,7 @@ D-Bus. The closest approximations:
   carries OSD-relevant hints — `value` (de-facto progress hint, int 0–100),
   `urgency`, `transient`, `x-canonical-private-synchronous` — but you can
   only consume them by **owning the bus name**, which conflicts with
-  dunst/mako/fnott/swaync. There is no passive listener path.
+  dunst/mako/fnott/swaync/histui. There is no passive listener path.
 * `org.kde.osdService` (KDE Plasma–internal RPC) — `showText`,
   `showProgress`, `volumeChanged`, `brightnessChanged`,
   `kbdLayoutChanged`, … — is a *callee* interface used only by Plasma
@@ -205,7 +205,7 @@ D-Bus. The closest approximations:
 Two opt-in modes are worth considering if there's user demand:
 
 1. **`org.freedesktop.Notifications` server compat mode** — awob owns the
-   bus name (mutually exclusive with dunst/mako). It treats any incoming
+   bus name (mutually exclusive with dunst/mako/histui). It treats any incoming
    `Notify` whose hints contain `value` (int) **or**
    `x-canonical-private-synchronous` **or** `transient=true` with a numeric
    value as an OSD bar event; everything else either gets dropped or
@@ -357,7 +357,7 @@ These came up in the canvass but don't fit awob's model well:
   own toast or sound. awob would need to be invoked explicitly from
   every screenshot script — no obvious universal hook.
 * **Do-Not-Disturb toggle** — desktop-specific (mako has its own
-  mode flag, swaync has another, KDE has another). No standard signal
+  mode flag, swaync has another, histui has another, KDE has another). No standard signal
   to subscribe to. The notification daemon is the right place to
   surface this.
 * **Clipboard content preview** — the OSD model (transient bar +
