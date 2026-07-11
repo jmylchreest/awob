@@ -7,8 +7,8 @@
 //! 2. An absolute path (`.svg` / `.png`).
 //! 3. A freedesktop icon name. Looked up first in the active theme's
 //!    `icons/` directory (passed via [`IconResolver::with_theme_dir`]),
-//!    then in the system freedesktop icon themes (Adwaita, hicolor) via
-//!    the `freedesktop-icons` crate.
+//!    then in the system icon themes and legacy pixmaps dirs via
+//!    [`paths::find_icon_file`] (preferred theme, then Adwaita, hicolor).
 //!
 //! Cached rasterisations are keyed by `(input, target_w, target_h)` and
 //! evicted opportunistically (LRU 64).
@@ -136,10 +136,6 @@ impl IconResolver {
                     return self.rasterise_path(&p, w, h).map(|x| (x, sym));
                 }
             }
-        }
-        if let Some(p) = freedesktop_icons::lookup(src).with_size(w as u16).find() {
-            let sym = is_symbolic_path(&p);
-            return self.rasterise_path(&p, w, h).map(|x| (x, sym));
         }
         if let Some(p) = paths::find_icon_file(src, w) {
             let sym = is_symbolic_path(&p);

@@ -17,7 +17,6 @@ cosmic-text = "0.12"
 resvg = "0.44"
 usvg = "0.44"
 png = "0.17"
-freedesktop-icons = "0.4"
 
 [dev-dependencies]
 tempfile = "3"

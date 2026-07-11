@@ -283,8 +283,13 @@ Icon resolution order, for an `image src="<name>"`:
 1. **`<theme-dir>/icons/<name>.svg`** (or `.png`). Theme-supplied
    override. Per-theme — coexisting themes in different directories
    never collide.
-2. **System freedesktop icon themes** (Adwaita, hicolor, …) via the
-   `freedesktop-icons` crate.
+2. **System freedesktop icon themes** — the preferred theme
+   (`$AWOB_ICON_THEME` / `$GTK_THEME` / gsettings), then Adwaita and
+   hicolor, across `$XDG_DATA_HOME/icons`, `$XDG_DATA_DIRS/icons`, and
+   `/usr/share/icons`. Both size-first (`24x24/status/`) and
+   category-first (`status/24/`, the breeze family) layouts are probed,
+   then legacy flat pixmaps dirs (`/usr/share/pixmaps`) as a last
+   resort.
 3. **Recurse with `image-missing-symbolic`** if `<name>` couldn't be
    resolved and isn't already that name. This gives themes a chance
    to ship their own missing-icon glyph (`icons/image-missing-symbolic.svg`).

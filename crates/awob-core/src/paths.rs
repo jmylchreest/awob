@@ -255,8 +255,28 @@ pub fn icon_size_search_order(size: u32) -> Vec<String> {
 
 /// Resolve a freedesktop icon name to a file path. Tries every preferred
 /// theme under every search root, with `<name>` and `<name>-symbolic`
-/// variants. Returns `None` if no match exists.
+/// variants, then legacy flat pixmaps dirs as a last resort. Returns
+/// `None` if no match exists.
 pub fn find_icon_file(name: &str, size: u32) -> Option<PathBuf> {
+    find_icon_in_roots(&icon_search_roots(), &preferred_icon_themes(), name, size)
+        .or_else(|| find_pixmap_file(name))
+}
+
+/// Theme lookup body, split out from [`find_icon_file`] so tests can
+/// inject roots/themes instead of mutating process environment.
+///
+/// Two on-disk layouts are probed per theme/category:
+/// - size-first (`<theme>/<NxN|scalable|symbolic>/<category>/`) — the
+///   layout Adwaita, hicolor, and most themes use;
+/// - category-first (`<theme>/<category>/<N>/`) — the breeze family.
+///   `index.theme` isn't parsed, so bare-numeric size dirs are derived
+///   from the same size search order.
+pub fn find_icon_in_roots(
+    roots: &[PathBuf],
+    themes: &[String],
+    name: &str,
+    size: u32,
+) -> Option<PathBuf> {
     let categories = [
         "status",
         "devices",
@@ -270,13 +290,19 @@ pub fn find_icon_file(name: &str, size: u32) -> Option<PathBuf> {
     ];
     let names = [name.to_string(), format!("{name}-symbolic")];
     let subdirs = icon_size_search_order(size);
-    for root in icon_search_roots() {
-        for theme in preferred_icon_themes() {
-            let theme_root = root.join(&theme);
+    for root in roots {
+        for theme in themes {
+            let theme_root = root.join(theme);
             if !theme_root.exists() {
                 continue;
             }
             for sub in &subdirs {
+                // "24x24" → "24" for category-first probing; the
+                // scalable/symbolic entries have no bare form.
+                let bare = sub
+                    .split('x')
+                    .next()
+                    .filter(|b| b.len() < sub.len() && b.chars().all(|c| c.is_ascii_digit()));
                 for cat in &categories {
                     for n in &names {
                         for ext in ["svg", "png"] {
@@ -284,9 +310,40 @@ pub fn find_icon_file(name: &str, size: u32) -> Option<PathBuf> {
                             if p.exists() {
                                 return Some(p);
                             }
+                            if let Some(bare) = bare {
+                                let p = theme_root.join(cat).join(bare).join(format!("{n}.{ext}"));
+                                if p.exists() {
+                                    return Some(p);
+                                }
+                            }
                         }
                     }
                 }
+            }
+        }
+    }
+    None
+}
+
+/// Legacy flat icon dirs (`<data-dir>/pixmaps`, `/usr/share/pixmaps`) —
+/// where old-school apps drop a single loose icon file. Searched only
+/// after every icon theme fails.
+fn find_pixmap_file(name: &str) -> Option<PathBuf> {
+    let mut roots: Vec<PathBuf> = Vec::new();
+    if let Some(d) = data_dir() {
+        roots.push(d.join("pixmaps"));
+    }
+    for d in xdg_data_dirs() {
+        roots.push(d.join("pixmaps"));
+    }
+    roots.push(PathBuf::from("/usr/share/pixmaps"));
+    let mut seen: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
+    roots.retain(|p| seen.insert(p.clone()));
+    for root in roots {
+        for ext in ["svg", "png"] {
+            let p = root.join(format!("{name}.{ext}"));
+            if p.exists() {
+                return Some(p);
             }
         }
     }
@@ -301,6 +358,53 @@ mod tests {
     fn xdg_data_dirs_default() {
         let v = xdg_data_dirs();
         assert!(!v.is_empty());
+    }
+
+    #[test]
+    fn icon_lookup_probes_both_theme_layouts() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().to_path_buf();
+
+        // Size-first layout (Adwaita/hicolor style).
+        let sf = root.join("sizefirst/24x24/status");
+        std::fs::create_dir_all(&sf).unwrap();
+        std::fs::write(sf.join("audio-volume-high.svg"), "<svg/>").unwrap();
+
+        // Category-first layout (breeze style).
+        let cf = root.join("catfirst/status/24");
+        std::fs::create_dir_all(&cf).unwrap();
+        std::fs::write(cf.join("battery-low.svg"), "<svg/>").unwrap();
+
+        let roots = vec![root.clone()];
+        let themes = vec!["sizefirst".to_string(), "catfirst".to_string()];
+        assert_eq!(
+            find_icon_in_roots(&roots, &themes, "audio-volume-high", 24),
+            Some(sf.join("audio-volume-high.svg"))
+        );
+        assert_eq!(
+            find_icon_in_roots(&roots, &themes, "battery-low", 24),
+            Some(cf.join("battery-low.svg"))
+        );
+        assert_eq!(
+            find_icon_in_roots(&roots, &themes, "no-such-icon", 24),
+            None
+        );
+    }
+
+    #[test]
+    fn icon_lookup_size_first_wins_within_a_theme() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().to_path_buf();
+        let sf = root.join("t/24x24/status");
+        let cf = root.join("t/status/24");
+        std::fs::create_dir_all(&sf).unwrap();
+        std::fs::create_dir_all(&cf).unwrap();
+        std::fs::write(sf.join("x.svg"), "<svg/>").unwrap();
+        std::fs::write(cf.join("x.svg"), "<svg/>").unwrap();
+        assert_eq!(
+            find_icon_in_roots(&[root], &["t".to_string()], "x", 24),
+            Some(sf.join("x.svg"))
+        );
     }
 
     #[test]
