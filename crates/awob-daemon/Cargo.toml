@@ -14,7 +14,6 @@ path = "src/main.rs"
 
 [dependencies]
 tracing.workspace = true
-tracing-subscriber.workspace = true
 awob-protocol.workspace = true
 awob-core.workspace = true
 # Pulled in for the shared tracing subscriber initialiser; the daemon
@@ -34,8 +33,7 @@ smithay-client-toolkit = "0.19"
 wayland-client = "0.31"
 calloop = "0.13"
 calloop-wayland-source = "0.3"
-rustix = { version = "0.38", features = ["fs", "mm"] }
-memmap2 = "0.9"
+rustix = { version = "0.38", features = ["fs"] }
 nix = { version = "0.29", features = ["signal", "process"] }
 
 [dev-dependencies]
