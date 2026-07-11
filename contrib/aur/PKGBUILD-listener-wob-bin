@@ -10,7 +10,7 @@
 pkgname=awob-listener-wob-bin
 pkgver=@VERSION@
 pkgrel=1
-pkgdesc="awob listener — wob-protocol FIFO bridge."
+pkgdesc="awob listener: wob protocol bridge"
 arch=('x86_64')
 url="https://github.com/jmylchreest/awob"
 license=('MIT')

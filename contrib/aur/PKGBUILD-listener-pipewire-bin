@@ -11,7 +11,7 @@
 pkgname=awob-listener-pipewire-bin
 pkgver=@VERSION@
 pkgrel=1
-pkgdesc="awob listener — PipeWire volume / mute → OSD."
+pkgdesc="awob listener: pipewire volume"
 arch=('x86_64')
 url="https://github.com/jmylchreest/awob"
 license=('MIT')

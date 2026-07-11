@@ -10,7 +10,7 @@
 pkgname=awob-listener-keyboard-backlight-bin
 pkgver=@VERSION@
 pkgrel=1
-pkgdesc="awob listener — keyboard backlight → OSD."
+pkgdesc="awob listener: keyboard backlight"
 arch=('x86_64')
 url="https://github.com/jmylchreest/awob"
 license=('MIT')

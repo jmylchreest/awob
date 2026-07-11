@@ -10,7 +10,7 @@
 pkgname=awob-listener-battery-bin
 pkgver=@VERSION@
 pkgrel=1
-pkgdesc="awob listener — battery + AC state → OSD."
+pkgdesc="awob listener: battery"
 arch=('x86_64')
 url="https://github.com/jmylchreest/awob"
 license=('MIT')

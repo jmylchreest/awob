@@ -17,7 +17,7 @@
 pkgname=awob-listener-power-profile-bin
 pkgver=@VERSION@
 pkgrel=1
-pkgdesc="awob listener — ACPI platform_profile → OSD."
+pkgdesc="awob listener: power profile"
 arch=('x86_64')
 url="https://github.com/jmylchreest/awob"
 license=('MIT')
