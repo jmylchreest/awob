@@ -3,7 +3,11 @@
 //! Themes are directories containing at minimum `scene.kdl`. The loader looks
 //! up theme dirs in this order:
 //!
-//! 1. `<themes_root>/<name>` — user-controlled themes dir (`--themes`).
+//! 1. `<root>/<name>` for each search root in order — `--themes-dir` /
+//!    config `themes_dir` first, then the XDG defaults (user config dir,
+//!    `$XDG_DATA_HOME`, `$XDG_DATA_DIRS` — see
+//!    [`awob_core::paths::theme_search_roots`]). First root containing
+//!    the theme wins; imports resolve relative to that root only.
 //! 2. embedded fallback (the bundled `default` theme baked into the binary).
 //!
 //! Hot reload uses `notify` on the active theme directory; on any modify
@@ -56,28 +60,30 @@ impl LoadedTheme {
 /// Load a theme by name; if `force_palette` is set, merge it last
 /// (later-wins-by-key) and add it to the watch list. Overlay's surface
 /// and scene blocks are ignored — colour-only by design.
+///
+/// The first root containing `<name>/scene.kdl` wins. A parse error in
+/// that copy propagates rather than falling through to a shadowed copy
+/// in a later root — silently loading a different file than the one
+/// being edited would make theme development maddening.
 pub fn load(
-    themes_root: Option<&Path>,
+    themes_roots: &[PathBuf],
     name: &str,
     force_palette: Option<&Path>,
 ) -> Result<LoadedTheme, LoadError> {
-    let mut loaded = if let Some(root) = themes_root {
+    let on_disk = themes_roots.iter().find_map(|root| {
         let dir = root.join(name);
+        dir.join("scene.kdl").exists().then_some(dir)
+    });
+    let mut loaded = if let Some(dir) = on_disk {
         let scene = dir.join("scene.kdl");
-        if scene.exists() {
-            let kdl = std::fs::read_to_string(&scene)?;
-            let theme = parse_theme_with_base(&kdl, Some(&dir))?;
-            let scene_abs = std::fs::canonicalize(&scene).unwrap_or(scene);
-            LoadedTheme {
-                name: name.into(),
-                theme,
-                source_dir: Some(dir),
-                scene_path: Some(scene_abs),
-            }
-        } else if name == EMBEDDED_DEFAULT_NAME {
-            load_embedded()?
-        } else {
-            return Err(LoadError::NotFound(name.to_string()));
+        let kdl = std::fs::read_to_string(&scene)?;
+        let theme = parse_theme_with_base(&kdl, Some(&dir))?;
+        let scene_abs = std::fs::canonicalize(&scene).unwrap_or(scene);
+        LoadedTheme {
+            name: name.into(),
+            theme,
+            source_dir: Some(dir),
+            scene_path: Some(scene_abs),
         }
     } else if name == EMBEDDED_DEFAULT_NAME {
         load_embedded()?
@@ -142,7 +148,7 @@ mod tests {
 
     #[test]
     fn loads_embedded_default() {
-        let t = load(None, EMBEDDED_DEFAULT_NAME, None).unwrap();
+        let t = load(&[], EMBEDDED_DEFAULT_NAME, None).unwrap();
         assert_eq!(t.name, "default");
         assert!(t.scene_path.is_none());
         assert_eq!(t.theme.surface.width, 360);
@@ -150,7 +156,36 @@ mod tests {
 
     #[test]
     fn unknown_theme_is_not_found() {
-        let err = load(None, "no-such-theme", None).unwrap_err();
+        let err = load(&[], "no-such-theme", None).unwrap_err();
         assert!(matches!(err, LoadError::NotFound(_)));
+    }
+
+    #[test]
+    fn earlier_root_shadows_later() {
+        let tmp = std::env::temp_dir().join(format!("awob-tl-shadow-{}", std::process::id()));
+        let user = tmp.join("user");
+        let system = tmp.join("system");
+        for (root, width) in [(&user, 100u32), (&system, 200u32)] {
+            let dir = root.join("mytheme");
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(
+                dir.join("scene.kdl"),
+                format!("surface {{ width {width}; height 40 }}\nscene {{ }}"),
+            )
+            .unwrap();
+        }
+        let roots = vec![user.clone(), system.clone()];
+        let t = load(&roots, "mytheme", None).unwrap();
+        assert_eq!(t.theme.surface.width, 100);
+        assert_eq!(
+            t.source_dir.as_deref(),
+            Some(user.join("mytheme").as_path())
+        );
+
+        // Only present in the later root → found there.
+        std::fs::remove_dir_all(user.join("mytheme")).unwrap();
+        let t = load(&roots, "mytheme", None).unwrap();
+        assert_eq!(t.theme.surface.width, 200);
+        std::fs::remove_dir_all(&tmp).unwrap();
     }
 }

@@ -134,7 +134,7 @@ Optional config file at `$XDG_CONFIG_HOME/awob/awob.toml` (or
 
 ```toml
 theme = "default"                             # active theme name
-themes_dir = "~/.config/awob/themes"          # theme directory root
+themes_dir = "~/my-themes"                    # extra themes root, searched first
 socket = "$XDG_RUNTIME_DIR/awob.sock"         # IPC socket path
 
 [supervisor]
@@ -150,6 +150,13 @@ restart = "always"                            # always | on-failure | never
 
 `$VAR` and `~/` in `themes_dir`, `socket`, `[[listeners]].args`, and
 `[[listeners]].env` values are expanded.
+
+`themes_dir` (and the `--themes-dir` flag, which is searched even
+earlier) is *prepended* to the default theme search path rather than
+replacing it: `~/.config/awob/themes`, `$XDG_DATA_HOME/awob/themes`,
+then `<dir>/awob/themes` for each `$XDG_DATA_DIRS` entry (which covers
+`/usr/share/awob/themes`, where distro packages install stock themes).
+The first root containing a theme's directory wins.
 
 ### Auto-discovery
 

@@ -58,8 +58,10 @@ any of your existing scripts.
   `awob theme set <name>` swaps themes without losing the FIFO
   connection.
 * **Hot-reload of the theme file.** Edit
-  `~/.config/awob/themes/wob/scene.kdl` and the next OSD picks up
-  the new layout / colours immediately.
+  `~/.config/awob/themes/wob/scene.kdl` (from a package install, copy
+  it there from `/usr/share/awob/themes/wob/` first — the user copy
+  shadows the packaged one) and the next OSD picks up the new
+  layout / colours immediately.
 * **Daemon supervises the shim.** If the FIFO listener crashes, the
   awob supervisor respawns it with capped exponential backoff.
 * **Multiple sources without daemon-per-event.** If you also want

@@ -27,10 +27,10 @@ package() {
         bin/awob \
         bin/awob-daemon
 
-    # Stock themes + shared palettes — daemon's themes_dir defaults to
-    # ~/.config/awob/themes, but having a system-wide fallback under
-    # /usr/share/awob/themes lets fresh users pick a theme without
-    # copying any files.
+    # Stock themes + shared palettes. /usr/share/awob/themes is on the
+    # daemon's theme search path (via $XDG_DATA_DIRS), so fresh users
+    # can pick a theme without copying any files; anything under
+    # ~/.config/awob/themes shadows these by name.
     install -dm755 "${pkgdir}/usr/share/awob"
     cp -r share/awob/themes "${pkgdir}/usr/share/awob/"
 

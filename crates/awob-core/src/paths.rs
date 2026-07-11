@@ -94,6 +94,29 @@ pub fn awob_themes_dir() -> Option<PathBuf> {
     awob_config_dir().map(|d| d.join("themes"))
 }
 
+/// Roots to search for themes, in order of preference:
+/// `$XDG_CONFIG_HOME/awob/themes`, then `$XDG_DATA_HOME/awob/themes`,
+/// then `<dir>/awob/themes` for each `$XDG_DATA_DIRS` entry (spec
+/// default `/usr/local/share:/usr/share` — this is what makes packaged
+/// themes under `/usr/share/awob/themes` visible). Earlier roots shadow
+/// later ones by theme name. Duplicates are removed preserving order;
+/// existence is not checked.
+pub fn theme_search_roots() -> Vec<PathBuf> {
+    let mut roots: Vec<PathBuf> = Vec::new();
+    if let Some(d) = awob_themes_dir() {
+        roots.push(d);
+    }
+    if let Some(d) = data_dir() {
+        roots.push(d.join(APP_NAME).join("themes"));
+    }
+    for d in xdg_data_dirs() {
+        roots.push(d.join(APP_NAME).join("themes"));
+    }
+    let mut seen: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
+    roots.retain(|p| seen.insert(p.clone()));
+    roots
+}
+
 pub fn awob_cache_dir() -> Option<PathBuf> {
     cache_dir().map(|d| d.join(APP_NAME))
 }
@@ -278,6 +301,15 @@ mod tests {
     fn xdg_data_dirs_default() {
         let v = xdg_data_dirs();
         assert!(!v.is_empty());
+    }
+
+    #[test]
+    fn theme_search_roots_deduped_and_themed() {
+        let v = theme_search_roots();
+        assert!(!v.is_empty());
+        let set: std::collections::HashSet<_> = v.iter().collect();
+        assert_eq!(set.len(), v.len(), "roots must be unique");
+        assert!(v.iter().all(|p| p.ends_with("awob/themes")));
     }
 
     #[test]

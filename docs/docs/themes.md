@@ -4,9 +4,26 @@ title: Themes
 
 # Theme author guide
 
-Themes are small directories under `~/.config/awob/themes/<name>/`
-(or the path set by `themes_dir` in `awob.toml`). Switch active theme
-at runtime with `awob theme set <name>`.
+Themes are small directories named `<themes-root>/<name>/`. The daemon
+searches an ordered list of roots — first root containing the theme
+wins:
+
+1. `--themes-dir` on the daemon command line, then `themes_dir` from
+   `awob.toml` (both optional; prepended to the defaults below, not
+   replacing them)
+2. `~/.config/awob/themes` (`$XDG_CONFIG_HOME/awob/themes`)
+3. `~/.local/share/awob/themes` (`$XDG_DATA_HOME/awob/themes`)
+4. `<dir>/awob/themes` for each `$XDG_DATA_DIRS` entry — by default
+   `/usr/local/share/awob/themes` and `/usr/share/awob/themes`, which
+   is where distro packages install the stock themes
+
+Switch active theme at runtime with `awob theme set <name>`.
+
+To customise a stock theme, copy its directory into
+`~/.config/awob/themes/<name>` — it shadows the packaged copy by name.
+Imports resolve relative to the copy you're editing, so if the theme
+imports from `../_palettes/` (most stock themes do), copy `_palettes/`
+alongside it or inline the palette.
 
 ## Directory layout
 
@@ -26,10 +43,11 @@ at runtime with `awob theme set <name>`.
     └── scene.kdl
 ```
 
-The theme loader treats every subdirectory of `themes_dir` that
+The theme loader treats every subdirectory of a themes root that
 contains a `scene.kdl` as a candidate theme. `_palettes/` doesn't
 have one and is naturally skipped — the leading underscore is a
-visual hint, not a parser rule.
+visual hint, not a parser rule. `awob theme list` merges all roots,
+with earlier roots shadowing later ones by name.
 
 ## `scene.kdl`
 

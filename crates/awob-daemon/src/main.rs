@@ -20,11 +20,13 @@ use clap::Parser;
 #[derive(Parser, Debug)]
 #[command(version, about = "awob — wayland overlay bar daemon")]
 struct Cli {
-    /// Theme name to load. Looked up first in --themes-dir, then the embedded fallback.
+    /// Theme name to load. Looked up across the themes search path, then the embedded fallback.
     #[arg(long)]
     theme: Option<String>,
 
-    /// User themes directory. Defaults to $XDG_CONFIG_HOME/awob/themes (~/.config/awob/themes).
+    /// Extra themes directory, searched before the defaults
+    /// ($XDG_CONFIG_HOME/awob/themes, $XDG_DATA_HOME/awob/themes,
+    /// then <dir>/awob/themes for each $XDG_DATA_DIRS entry).
     #[arg(long)]
     themes_dir: Option<PathBuf>,
 
@@ -50,7 +52,7 @@ struct Cli {
 struct Shared {
     history: state::History,
     theme: theme_loader::LoadedTheme,
-    themes_root: Option<PathBuf>,
+    themes_roots: Vec<PathBuf>,
     surface: Option<wayland::SurfaceHandle>,
     watcher: Option<watcher::ThemeWatcher>,
     /// Active `awob.toml` path; rewrite target for `SetTheme { persist: true }`.
@@ -165,11 +167,7 @@ impl Shared {
                 Response::Query { entries }
             }
             Request::SetTheme { name, persist } => {
-                match theme_loader::load(
-                    self.themes_root.as_deref(),
-                    &name,
-                    self.force_palette.as_deref(),
-                ) {
+                match theme_loader::load(&self.themes_roots, &name, self.force_palette.as_deref()) {
                     Ok(t) => {
                         self.theme = t;
                         self.rewatch();
@@ -204,11 +202,7 @@ impl Shared {
             }
             Request::Reload => {
                 let name = self.theme.name.clone();
-                match theme_loader::load(
-                    self.themes_root.as_deref(),
-                    &name,
-                    self.force_palette.as_deref(),
-                ) {
+                match theme_loader::load(&self.themes_roots, &name, self.force_palette.as_deref()) {
                     Ok(t) => {
                         self.theme = t;
                         self.rewatch();
@@ -223,7 +217,7 @@ impl Shared {
                 }
             }
             Request::ThemeList => Response::ThemeList {
-                themes: enumerate_themes(self.themes_root.as_deref(), &self.theme.name),
+                themes: enumerate_themes(&self.themes_roots, &self.theme.name),
             },
             Request::SetForcePalette { path } => {
                 // Update the in-memory force_palette and immediately
@@ -232,11 +226,7 @@ impl Shared {
                 // thread for instant redraw of any visible OSD.
                 self.force_palette = path.map(std::path::PathBuf::from);
                 let name = self.theme.name.clone();
-                match theme_loader::load(
-                    self.themes_root.as_deref(),
-                    &name,
-                    self.force_palette.as_deref(),
-                ) {
+                match theme_loader::load(&self.themes_roots, &name, self.force_palette.as_deref()) {
                     Ok(t) => {
                         self.theme = t;
                         self.rewatch();
@@ -258,23 +248,24 @@ impl Shared {
     }
 }
 
-/// Walk `themes_root` and return one [`ThemeInfo`] per subdirectory
-/// containing a `scene.kdl`, plus the embedded fallback if it isn't
-/// already represented by an on-disk theme of the same name.
+/// Walk every root in `themes_roots` and return one [`ThemeInfo`] per
+/// subdirectory containing a `scene.kdl`, plus the embedded fallback if
+/// it isn't already represented by an on-disk theme of the same name.
+/// Earlier roots shadow later ones by theme name — matching what
+/// `theme_loader::load` would actually pick.
 ///
 /// `description` is read best-effort from a sibling `manifest.toml`'s
 /// top-level `description = "..."` key. Anything else in the manifest
 /// is ignored — see THEMES.md for the full list of conventional fields.
-fn enumerate_themes(
-    themes_root: Option<&Path>,
-    active_name: &str,
-) -> Vec<awob_protocol::ThemeInfo> {
+fn enumerate_themes(themes_roots: &[PathBuf], active_name: &str) -> Vec<awob_protocol::ThemeInfo> {
     use awob_protocol::ThemeInfo;
     let mut out: Vec<ThemeInfo> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
 
-    if let Some(root) = themes_root
-        && let Ok(read) = std::fs::read_dir(root)
-    {
+    for root in themes_roots {
+        let Ok(read) = std::fs::read_dir(root) else {
+            continue;
+        };
         for entry in read.flatten() {
             let dir = entry.path();
             if !dir.is_dir() {
@@ -287,6 +278,9 @@ fn enumerate_themes(
             let Some(name) = dir.file_name().and_then(|s| s.to_str()) else {
                 continue;
             };
+            if !seen.insert(name.to_string()) {
+                continue;
+            }
             let description = read_manifest_description(&dir.join("manifest.toml"));
             out.push(ThemeInfo {
                 name: name.to_string(),
@@ -466,8 +460,19 @@ impl WithProtocolCheck for Response {
     }
 }
 
-fn default_themes_dir() -> Option<PathBuf> {
-    awob_core::paths::awob_themes_dir()
+/// Build the ordered themes search path: explicit `--themes-dir`, then
+/// config `themes_dir`, then the XDG defaults. Explicit dirs are
+/// *prepended* rather than replacing the defaults — packaged themes
+/// under /usr/share/awob/themes stay reachable, and an earlier root
+/// shadows a later one by theme name.
+fn themes_search_path(cli_dir: Option<PathBuf>, config_dir: Option<PathBuf>) -> Vec<PathBuf> {
+    let mut roots: Vec<PathBuf> = Vec::new();
+    roots.extend(cli_dir);
+    roots.extend(config_dir);
+    roots.extend(awob_core::paths::theme_search_roots());
+    let mut seen: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
+    roots.retain(|p| seen.insert(p.clone()));
+    roots
 }
 
 /// Acquire a mutex, recovering from a poisoned lock instead of
@@ -501,16 +506,13 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         .clone()
         .or(file_config.theme.clone())
         .unwrap_or_else(|| theme_loader::EMBEDDED_DEFAULT_NAME.into());
-    let themes_root = cli
-        .themes_dir
-        .clone()
-        .or_else(|| {
-            file_config
-                .themes_dir
-                .as_deref()
-                .map(awob_core::paths::expand_config_path)
-        })
-        .or_else(default_themes_dir);
+    let themes_roots = themes_search_path(
+        cli.themes_dir.clone(),
+        file_config
+            .themes_dir
+            .as_deref()
+            .map(awob_core::paths::expand_config_path),
+    );
 
     // CLI flag wins, then `force_palette` from awob.toml with `$VAR` / `~/`
     // expansion. Loader merges it last and adds it to the hot-reload list.
@@ -523,11 +525,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
 
     // Cold-start fallback to embedded default — refusing to start would
     // strand the user with no OSD and no way to drive the daemon to recover.
-    let initial = match theme_loader::load(
-        themes_root.as_deref(),
-        &theme_name,
-        force_palette.as_deref(),
-    ) {
+    let initial = match theme_loader::load(&themes_roots, &theme_name, force_palette.as_deref()) {
         Ok(t) => t,
         Err(e) => {
             tracing::warn!(
@@ -593,7 +591,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     let shared = Arc::new(Mutex::new(Shared {
         history: state::History::new(),
         theme: initial,
-        themes_root,
+        themes_roots,
         surface,
         watcher,
         config_path,
@@ -623,9 +621,9 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 }
                 let mut s = lock_or_recover(&shared, "shared(reload)");
                 let name = s.theme.name.clone();
-                let root = s.themes_root.clone();
+                let roots = s.themes_roots.clone();
                 let force_palette = s.force_palette.clone();
-                match theme_loader::load(root.as_deref(), &name, force_palette.as_deref()) {
+                match theme_loader::load(&roots, &name, force_palette.as_deref()) {
                     Ok(t) => {
                         s.theme = t;
                         s.rewatch();
