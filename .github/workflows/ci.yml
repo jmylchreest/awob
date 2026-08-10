@@ -31,7 +31,7 @@ jobs:
     name: cargo test (stable)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install system dependencies
         run: |
@@ -43,7 +43,7 @@ jobs:
             libudev-dev libxkbcommon-dev
 
       - name: Install stable toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@v1
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
@@ -60,7 +60,7 @@ jobs:
     name: cargo clippy
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install system dependencies
         run: |
@@ -71,7 +71,7 @@ jobs:
             libpipewire-0.3-dev libdbus-1-dev \
             libudev-dev libxkbcommon-dev
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@v1
         with:
           components: clippy
 
@@ -86,8 +86,8 @@ jobs:
     name: cargo fmt --check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@v1
         with:
           components: rustfmt
       - run: cargo fmt --all -- --check
@@ -96,7 +96,7 @@ jobs:
     name: cargo build (MSRV)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install system dependencies
         run: |
@@ -113,7 +113,7 @@ jobs:
           version=$(grep -m1 '^rust-version' Cargo.toml | sed -E 's/.*"(.*)".*/\1/')
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@v2
         with:
           toolchain: ${{ steps.msrv.outputs.version }}
 
