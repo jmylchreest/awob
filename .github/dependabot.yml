@@ -1,0 +1,54 @@
+# dependabot.yml — automated dependency updates for awob.
+#
+# Tracks the two ecosystems we actually consume:
+#   - cargo: the Rust dep graph. Monthly schedule because CosmosText,
+#     Smithay, and resvg majors are not weekly-stable.
+#   - github-actions: CI workflow actions. Weekly for the third-party
+#     action ecosystem (checkout, setup-node, rust-toolchain, etc).
+#
+# Each PR dependabot opens with our conventional `fix(deps)` prefix will
+# carry its own audit log and CI run, so we can tell at a glance which
+# bump is good vs which needs follow-up code work (cf. PR-D1's deferred
+# audit findings).
+
+version: 2
+updates:
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+      day: "sunday"
+    commit-message:
+      prefix: "deps"
+    labels:
+      - "dependencies"
+      - "cargo"
+    groups:
+      # Bundle minor + patch cargo updates into one PR per month so we
+      # don't get a flood of single-bump PRs.
+      patch-and-minor:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    commit-message:
+      prefix: "ci"
+    labels:
+      - "dependencies"
+      - "github-actions"
+    groups:
+      patch-and-minor:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+    open-pull-requests-limit: 3
