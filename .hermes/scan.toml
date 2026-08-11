@@ -1,0 +1,41 @@
+# Hermes autonomous scan policy for jmylchreest/awob.
+# Read by the repo-scan-orchestrator cron (weekly).
+# Schema v1; missing keys fall back to defaults in repo-scan-orchestrator.
+
+schema = 1
+
+[schedule]
+# Default cadence is weekly — matches the orchestrator's default.
+# Override here if you want a different cadence for this repo.
+cadence = "weekly"
+
+[work]
+# fix_inline:
+#   "yes"  - cron raises A/D PRs and C issues unilaterally
+#   "no"   - cron files issues only, never PRs
+#   "ask"  - cron raises draft PRs only, no final-body actions
+#   "auto" - A/D raise PRs, B always raises PRs, C files issues.
+# We use auto: every dep bump is its own PR; the audit-tracking issues
+# live alongside.
+fix_inline = "auto"
+
+# Bundle small bumps onto one PR? Default false (each dep = its own PR).
+# When true, the cron groups all A-bumps that resolve cleanly into one PR.
+# B-bumps are NEVER bundled — they carry their own code fix.
+bundle_bumps = false
+
+[audit]
+# Findings this many days old AND not yet patched upstream are skipped.
+# Default 0 (file immediately). Set 7 to give upstream a chance.
+grace_days = 0
+
+# Hand-curated suppressions. Empty for awob today.
+# Format: crate names, comma-separated, with optional reason as a comment.
+ignore_crates = []
+
+[notify]
+# When the cron opens a PR or issue, it labels it `hermes-auto` so the
+# human can filter the GH events stream for "what did the cron do this
+# week" vs "what was a human PR".
+# Disable (false) if you'd rather the events stream look purely manual.
+add_label = true
