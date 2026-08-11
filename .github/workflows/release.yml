@@ -355,7 +355,7 @@ jobs:
 
       - name: Publish ${{ matrix.pkgname }} to AUR
         if: matrix.pkgname != 'awob-git' || steps.changed.outputs.skip != 'true'
-        uses: KSXGitHub/github-actions-deploy-aur@v4.1.3
+        uses: KSXGitHub/github-actions-deploy-aur@v4.2.0
         with:
           pkgname: ${{ matrix.pkgname }}
           pkgbuild: ./aur-staged/${{ matrix.pkgname }}/PKGBUILD
