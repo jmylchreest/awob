@@ -137,8 +137,8 @@ impl TextRenderer {
             } else {
                 Style::Normal
             });
-        buffer.set_size(&mut self.font_system, Some(10_000.0), Some(spec.size * 4.0));
-        buffer.set_text(&mut self.font_system, text, attrs, Shaping::Advanced);
+        buffer.set_size(Some(10_000.0), Some(spec.size * 4.0));
+        buffer.set_text(text, &attrs, Shaping::Advanced, None);
         buffer
     }
 }
