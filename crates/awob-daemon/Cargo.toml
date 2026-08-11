@@ -29,7 +29,7 @@ thiserror = "2"
 # fancy help/usage/colour/error-context formatting that adds ~80 KB.
 clap = { version = "4", default-features = false, features = ["derive", "std"] }
 notify = "6"
-smithay-client-toolkit = "0.19"
+smithay-client-toolkit = "0.21"
 wayland-client = "0.31"
 calloop = "0.13"
 calloop-wayland-source = "0.3"
