@@ -32,7 +32,7 @@ notify = "6"
 smithay-client-toolkit = "0.19"
 wayland-client = "0.31"
 calloop = "0.13"
-calloop-wayland-source = "0.3"
+calloop-wayland-source = "0.4"
 rustix = { version = "0.38", features = ["fs"] }
 nix = { version = "0.29", features = ["signal", "process"] }
 
