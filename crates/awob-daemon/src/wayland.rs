@@ -18,7 +18,7 @@ use calloop::channel::Event as CalloopEvent;
 use calloop_wayland_source::WaylandSource;
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState},
-    delegate_compositor, delegate_layer, delegate_output, delegate_registry, delegate_shm,
+    delegate_registry,
     output::{OutputHandler, OutputState},
     registry::{ProvidesRegistryState, RegistryState},
     registry_handlers,
@@ -822,8 +822,5 @@ impl ProvidesRegistryState for State {
     registry_handlers!(OutputState);
 }
 
-delegate_compositor!(State);
-delegate_output!(State);
 delegate_registry!(State);
-delegate_shm!(State);
-delegate_layer!(State);
+smithay_client_toolkit::delegate_dispatch2!(State);
