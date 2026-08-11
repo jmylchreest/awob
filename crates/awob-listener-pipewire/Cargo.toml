@@ -16,8 +16,8 @@ path = "src/main.rs"
 tracing.workspace = true
 awob-client.workspace = true
 clap = { version = "4", default-features = false, features = ["derive", "std"] }
-pipewire = "0.9"
-libspa = "0.9"
+pipewire = "0.10"
+libspa = "0.10"
 # Parsing PipeWire metadata values for `--default-only` mode.
 # `default.audio.sink` etc. are JSON-encoded — extracting the `name`
 # field is a one-line `serde_json::from_str` rather than a hand-rolled
