@@ -42,7 +42,7 @@ jobs:
       version: ${{ steps.version.outputs.version }}
       is_release: ${{ steps.version.outputs.is_release }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
@@ -65,7 +65,7 @@ jobs:
     needs: prepare
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
       - name: Install system dependencies
         run: |
           sudo apt-get update
@@ -74,7 +74,7 @@ jobs:
             libfontconfig1-dev libfreetype6-dev \
             libpipewire-0.3-dev libdbus-1-dev \
             libudev-dev libxkbcommon-dev
-      - uses: dtolnay/rust-toolchain@v1
+      - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
@@ -93,7 +93,7 @@ jobs:
           - target: x86_64-unknown-linux-gnu
             arch: x86_64
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
 
       - name: Install system dependencies
         run: |
@@ -104,7 +104,7 @@ jobs:
             libpipewire-0.3-dev libdbus-1-dev \
             libudev-dev libxkbcommon-dev
 
-      - uses: dtolnay/rust-toolchain@v1
+      - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
 
@@ -160,7 +160,7 @@ jobs:
     needs: [prepare, build]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
 
       - uses: actions/download-artifact@v4
         with:
@@ -225,7 +225,7 @@ jobs:
     runs-on: ubuntu-latest
     if: needs.prepare.outputs.is_release == 'true' || github.event_name == 'workflow_dispatch'
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           path: dist
@@ -274,7 +274,7 @@ jobs:
           - awob-listeners-all
           - awob-git
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
         if: matrix.pkgname == 'awob-git'
         with:
           fetch-depth: 0
