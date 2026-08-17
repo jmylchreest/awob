@@ -232,7 +232,7 @@ jobs:
           merge-multiple: true
 
       - name: Publish release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           name: ${{ needs.prepare.outputs.is_release == 'true' && format('v{0}', needs.prepare.outputs.version) || 'snapshot' }}
           tag_name: ${{ needs.prepare.outputs.is_release == 'true' && github.ref_name || 'snapshot' }}
