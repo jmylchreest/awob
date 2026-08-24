@@ -162,7 +162,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: artifacts
           merge-multiple: true
@@ -226,7 +226,7 @@ jobs:
     if: needs.prepare.outputs.is_release == 'true' || github.event_name == 'workflow_dispatch'
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
@@ -298,7 +298,7 @@ jobs:
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         if: matrix.pkgname != 'awob-git' || steps.changed.outputs.skip != 'true'
         with:
           name: awob-${{ needs.prepare.outputs.version }}-aur-staged
