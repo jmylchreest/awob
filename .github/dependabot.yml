@@ -6,7 +6,7 @@
 #   - github-actions: CI workflow actions. Weekly for the third-party
 #     action ecosystem (checkout, setup-node, rust-toolchain, etc).
 #
-# Each PR dependabot opens with our conventional `fix(deps)` prefix will
+# Each PR dependabot opens with our conventional `chore(deps)` prefix will
 # carry its own audit log and CI run, so we can tell at a glance which
 # bump is good vs which needs follow-up code work (cf. PR-D1's deferred
 # audit findings).
@@ -19,7 +19,7 @@ updates:
       interval: "monthly"
       day: "sunday"
     commit-message:
-      prefix: "deps"
+      prefix: "chore(deps)"
     labels:
       - "dependencies"
       - "cargo"
