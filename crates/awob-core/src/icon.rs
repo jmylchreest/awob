@@ -208,7 +208,7 @@ pub fn scale_pixmap_alpha(pm: &mut Pixmap, mul: f32) {
         return;
     }
     let data = pm.data_mut();
-    for px in data.chunks_exact_mut(4) {
+    for px in data.as_chunks_mut::<4>().0 {
         px[0] = ((px[0] as f32) * m) as u8;
         px[1] = ((px[1] as f32) * m) as u8;
         px[2] = ((px[2] as f32) * m) as u8;
@@ -225,7 +225,7 @@ pub fn tint_pixmap(pm: &mut Pixmap, colour: crate::colour::Colour) {
     let cb = colour.b as u32;
     let ca = colour.a as u32;
     let data = pm.data_mut();
-    for px in data.chunks_exact_mut(4) {
+    for px in data.as_chunks_mut::<4>().0 {
         let src_a = px[3] as u32;
         if src_a == 0 {
             continue;
