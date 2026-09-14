@@ -5,7 +5,8 @@ import type * as Preset from "@docusaurus/preset-classic";
 const config: Config = {
   title: "awob",
   tagline: "Another Wayland Overlay Bar",
-  favicon: "img/favicon.ico",
+  // No static assets are shipped; avoid copying a missing static directory.
+  staticDirectories: [],
 
   // Deployed to GitHub Pages at https://jmylchreest.github.io/awob/.
   url: "https://jmylchreest.github.io",
