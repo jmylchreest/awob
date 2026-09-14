@@ -16,4 +16,4 @@ path = "src/main.rs"
 tracing.workspace = true
 awob-client.workspace = true
 clap = { version = "4", default-features = false, features = ["derive", "std"] }
-nix = { version = "0.29", features = ["fs"] }
+nix = { workspace = true, features = ["fs"] }

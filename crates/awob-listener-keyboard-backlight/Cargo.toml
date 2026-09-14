@@ -17,8 +17,8 @@ tracing.workspace = true
 awob-client.workspace = true
 clap = { version = "4", default-features = false, features = ["derive", "std"] }
 # `notify` covers the userspace-write hot path (brightnessctl etc).
-notify = "6"
+notify.workspace = true
 # `udev` covers drivers that emit KOBJ_CHANGE on LED state updates
 # (some laptop EC drivers do, others don't).
 udev = "0.9"
-nix = { version = "0.29", features = ["poll"] }
+nix = { workspace = true, features = ["poll"] }

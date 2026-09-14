@@ -20,7 +20,10 @@ all-features = false
 db-path = "~/.cargo/advisory-db"
 db-urls = ["https://github.com/rustsec/advisory-db"]
 yanked = "warn"
-ignore = []
+# Informational maintenance notice, not a known exploit. cosmic-text 0.19's
+# fontdb 0.23 still needs ttf-parser and has no released replacement. Revisit
+# on the next cosmic-text/fontdb update; all other advisories remain blocking.
+ignore = ["RUSTSEC-2026-0192"]
 
 [bans]
 multiple-versions = "warn"

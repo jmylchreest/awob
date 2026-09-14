@@ -691,7 +691,12 @@ fn argb_premul_with_alpha(src: &[u8], dst: &mut [u8], alpha: f32) {
     debug_assert_eq!(src.len(), dst.len());
     let a = alpha.clamp(0.0, 1.0);
     if a >= 0.999 {
-        for (s, d) in src.chunks_exact(4).zip(dst.chunks_exact_mut(4)) {
+        for (s, d) in src
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(dst.as_chunks_mut::<4>().0)
+        {
             d[0] = s[2];
             d[1] = s[1];
             d[2] = s[0];
@@ -700,7 +705,12 @@ fn argb_premul_with_alpha(src: &[u8], dst: &mut [u8], alpha: f32) {
     } else if a <= 0.001 {
         dst.fill(0);
     } else {
-        for (s, d) in src.chunks_exact(4).zip(dst.chunks_exact_mut(4)) {
+        for (s, d) in src
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(dst.as_chunks_mut::<4>().0)
+        {
             d[0] = ((s[2] as f32) * a) as u8;
             d[1] = ((s[1] as f32) * a) as u8;
             d[2] = ((s[0] as f32) * a) as u8;

@@ -1,0 +1,24 @@
+name: Weekly security audit
+
+on:
+  schedule:
+    - cron: '17 7 * * 1'
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: audit-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - run: cargo install cargo-audit --version 0.22.2 --locked
+      - run: cargo audit
