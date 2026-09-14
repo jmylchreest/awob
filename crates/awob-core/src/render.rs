@@ -860,7 +860,7 @@ scene {
         assert_eq!(pm.width(), theme.surface.width);
         assert_eq!(pm.height(), theme.surface.height);
         let bytes = pm.data();
-        let any_nonzero = bytes.chunks_exact(4).any(|px| px[3] != 0);
+        let any_nonzero = bytes.as_chunks::<4>().0.iter().any(|px| px[3] != 0);
         assert!(any_nonzero, "pixmap should contain non-transparent pixels");
     }
 

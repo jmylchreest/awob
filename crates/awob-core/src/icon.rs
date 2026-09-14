@@ -416,7 +416,9 @@ mod tests {
         assert_eq!(pm.height(), 32);
         let red_pixels = pm
             .data()
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .filter(|p| p[0] >= 200 && p[1] < 50 && p[2] < 50)
             .count();
         assert!(
