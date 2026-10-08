@@ -422,11 +422,13 @@ impl State {
     }
 
     /// Hot-swap theme + palette on a visible OSD without restarting the
-    /// cycle. No-op when idle — the next send picks up the new theme.
+    /// cycle. When idle, invalidate caches; the next send picks up the theme.
     /// Palette-keyed colours (`fill="$bg"`) refresh on the next frame;
     /// style-resolved colours (e.g. `$accent` from `apply_style`) only
     /// refresh on the next send.
     fn retheme(&mut self, theme: Theme, theme_dir: Option<std::path::PathBuf>) {
+        self.renderer.invalidate_caches();
+        self.renderer.set_theme_dir(theme_dir);
         if self.theme.is_none() || self.bindings.is_none() {
             return;
         }
@@ -448,7 +450,6 @@ impl State {
             self.update_layer(&merged);
         }
         self.surface_def = merged;
-        self.renderer.set_theme_dir(theme_dir);
         if let Some(bindings) = self.bindings.as_mut() {
             bindings.palette = theme.palette.clone();
         }
