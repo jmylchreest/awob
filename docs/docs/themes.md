@@ -438,3 +438,22 @@ Each rendered text label is limited to 16 KiB of UTF-8 and a finite font size gr
 than zero and no more than 512 pixels. Exceeding either limit fails the render;
 labels are not silently truncated. Applications using the core text API must handle
 errors from `TextRenderer::measure` and `TextRenderer::draw`.
+
+
+### SVG image resources
+
+Icons support plain SVG and PNG. JPEG, GIF, WebP and gzip-compressed SVG are not
+accepted, including images embedded in SVG. Inline MIME types must be exactly
+`image/svg+xml` or `image/png` (optionally followed by `;base64`).
+
+Files are limited to 1 MiB and must resolve to regular files; symlinks to regular
+files are allowed. Inline decoded data is limited to 256 KiB. SVG image references
+share a 2 MiB source-data budget, at most 64 references, four nested SVG levels,
+and a 32 MiB cumulative decoded PNG budget per root icon. Repeated references
+count again. These limits supplement the raster dimensions above.
+
+Top-level SVGs may reference external PNG/SVG files. Relative paths keep their
+existing resolution against the daemon's working directory. Nested SVGs can embed
+inline images but cannot load external files, following the SVG specification.
+A rejected resource makes the whole icon use the normal placeholder rather than
+cache a partial image. FIFOs, devices and directories cannot be icon inputs.

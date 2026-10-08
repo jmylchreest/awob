@@ -20,6 +20,8 @@ use tiny_skia::{Pixmap, Transform};
 
 use crate::paths;
 
+mod svg;
+
 const MAX_INLINE_BYTES: usize = 256 * 1024;
 const MAX_ON_DISK_BYTES: u64 = 1024 * 1024;
 const CACHE_CAP: usize = 64;
@@ -194,44 +196,83 @@ impl IconResolver {
     }
 
     fn rasterise_path(&self, path: &Path, w: u32, h: u32) -> Result<Pixmap, IconError> {
-        let meta = std::fs::metadata(path)?;
-        if meta.len() > MAX_ON_DISK_BYTES {
-            return Err(IconError::TooLarge);
-        }
-        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-        match ext.to_ascii_lowercase().as_str() {
-            "svg" => {
-                let bytes = std::fs::read(path)?;
-                rasterise_svg(&bytes, w, h)
-            }
-            "png" => {
-                let file = std::fs::File::open(path)?;
-                rasterise_png(file, w, h)
-            }
+        let format = file_format(path)?;
+        let bytes = read_icon_file(path)?;
+        match format {
+            "image/svg+xml" => rasterise_svg(&bytes, w, h),
+            "image/png" => rasterise_png(std::io::Cursor::new(bytes), w, h),
             _ => Err(IconError::UnsupportedFormat),
         }
     }
 
     fn rasterise_data_uri(&self, src: &str, w: u32, h: u32) -> Result<Pixmap, IconError> {
         let comma = src.find(',').ok_or(IconError::UnsupportedFormat)?;
-        let header = &src[..comma];
+        let header = src[5..comma].strip_suffix(";base64");
+        let base64 = header.is_some();
+        let mime = header.unwrap_or(&src[5..comma]);
+        if !matches!(mime, "image/svg+xml" | "image/png") {
+            return Err(IconError::UnsupportedFormat);
+        }
         let payload = &src[comma + 1..];
-        let bytes = if header.contains(";base64") {
+        let bytes = if base64 {
+            // Cap the encoded representation before allocating the decoded Vec.
+            if payload.len() > MAX_INLINE_BYTES.div_ceil(3) * 4 {
+                return Err(IconError::TooLarge);
+            }
             base64_decode(payload).map_err(|_| IconError::UnsupportedFormat)?
         } else {
+            if payload.len() > MAX_INLINE_BYTES {
+                return Err(IconError::TooLarge);
+            }
             payload.as_bytes().to_vec()
         };
         if bytes.len() > MAX_INLINE_BYTES {
             return Err(IconError::TooLarge);
         }
-        if header.contains("svg") {
-            rasterise_svg(&bytes, w, h)
-        } else if header.contains("png") {
-            rasterise_png(std::io::Cursor::new(bytes), w, h)
-        } else {
-            Err(IconError::UnsupportedFormat)
+        match mime {
+            "image/svg+xml" => rasterise_svg(&bytes, w, h),
+            "image/png" => rasterise_png(std::io::Cursor::new(bytes), w, h),
+            _ => Err(IconError::UnsupportedFormat),
         }
     }
+}
+
+fn file_format(path: &Path) -> Result<&'static str, IconError> {
+    match path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "svg" => Ok("image/svg+xml"),
+        "png" => Ok("image/png"),
+        _ => Err(IconError::UnsupportedFormat),
+    }
+}
+
+fn read_icon_file(path: &Path) -> Result<Vec<u8>, IconError> {
+    use std::io::Read;
+    use std::os::unix::fs::OpenOptionsExt;
+    // A FIFO must not block even before we can inspect its file type. Inspect
+    // the opened descriptor so a path replacement cannot race the size check.
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(rustix::fs::OFlags::NONBLOCK.bits() as i32)
+        .open(path)?;
+    let meta = file.metadata()?;
+    if !meta.is_file() {
+        return Err(IconError::UnsupportedFormat);
+    }
+    if meta.len() > MAX_ON_DISK_BYTES {
+        return Err(IconError::TooLarge);
+    }
+    let mut bytes = Vec::new();
+    file.take(MAX_ON_DISK_BYTES + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MAX_ON_DISK_BYTES {
+        return Err(IconError::TooLarge);
+    }
+    Ok(bytes)
 }
 
 /// Multiply every pixel's alpha (and RGB, since the input is
@@ -289,8 +330,7 @@ fn is_symbolic_path(p: &Path) -> bool {
 
 fn rasterise_svg(bytes: &[u8], w: u32, h: u32) -> Result<Pixmap, IconError> {
     crate::limits::pixels(w, h).map_err(|_| IconError::TooLarge)?;
-    let opt = usvg::Options::default();
-    let tree = usvg::Tree::from_data(bytes, &opt).map_err(|e| IconError::Svg(e.to_string()))?;
+    let tree = svg::parse(bytes)?;
     let mut pm = Pixmap::new(w, h).ok_or_else(|| IconError::Svg("pixmap alloc".into()))?;
     pm.fill(tiny_skia::Color::TRANSPARENT);
     let svg_size = tree.size();
@@ -576,5 +616,63 @@ mod tests {
             rasterise_svg(EMBEDDED_FALLBACK_SVG, 4096, 4096),
             Err(IconError::TooLarge)
         ));
+    }
+    #[test]
+    fn security_svg_external_file_cannot_bypass_direct_size_cap() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("large.png");
+        let mut png = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut png, 1, 1);
+            encoder.set_color(png::ColorType::Rgba);
+            let mut writer = encoder.write_header().unwrap();
+            writer.write_image_data(&[255, 0, 0, 255]).unwrap();
+        }
+        png.resize(MAX_ON_DISK_BYTES as usize + 1, 0);
+        std::fs::write(&path, png).unwrap();
+        let svg = format!(
+            r#"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"><image href="{}" width="8" height="8"/></svg>"#,
+            path.display()
+        );
+        assert!(rasterise_svg(svg.as_bytes(), 8, 8).is_err());
+    }
+
+    #[test]
+    fn security_file_reads_reject_special_files_but_allow_regular_symlinks() {
+        let dir = tempfile::tempdir().unwrap();
+        let fifo = dir.path().join("icon.svg");
+        rustix::fs::mknodat(
+            rustix::fs::CWD,
+            &fifo,
+            rustix::fs::FileType::Fifo,
+            rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
+            0,
+        )
+        .unwrap();
+        assert!(read_icon_file(&fifo).is_err());
+        assert!(read_icon_file(std::path::Path::new("/dev/zero")).is_err());
+        let regular = dir.path().join("regular.svg");
+        std::fs::write(&regular, EMBEDDED_FALLBACK_SVG).unwrap();
+        let link = dir.path().join("link.svg");
+        std::os::unix::fs::symlink(&regular, &link).unwrap();
+        assert_eq!(read_icon_file(&link).unwrap(), EMBEDDED_FALLBACK_SVG);
+    }
+
+    #[test]
+    fn security_inline_size_and_mime_are_checked_before_decode() {
+        let resolver = IconResolver::new();
+        let too_big = format!(
+            "data:image/png;base64,{}",
+            "!".repeat(MAX_INLINE_BYTES.div_ceil(3) * 4 + 1)
+        );
+        assert!(matches!(
+            resolver.rasterise_data_uri(&too_big, 8, 8),
+            Err(IconError::TooLarge)
+        ));
+        assert!(matches!(
+            resolver.rasterise_data_uri("data:text/not-svg,<svg/>", 8, 8),
+            Err(IconError::UnsupportedFormat)
+        ));
+        assert!(rasterise_svg(&[0x1f, 0x8b, 0x08], 8, 8).is_err());
     }
 }
