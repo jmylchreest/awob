@@ -1,32 +1,34 @@
 //! Check allocation traffic separately from retained memory or frame timings.
 use std::alloc::{GlobalAlloc, Layout, System};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed};
+use std::cell::Cell;
 
 use awob_core::{bindings::Bindings, render::Renderer, theme};
 
 struct CountingAllocator;
-static ENABLED: AtomicBool = AtomicBool::new(false);
-static BYTES: AtomicUsize = AtomicUsize::new(0);
+thread_local! {
+    static ENABLED: Cell<bool> = const { Cell::new(false) };
+    static BYTES: Cell<usize> = const { Cell::new(0) };
+}
 
 // SAFETY: every operation forwards its pointer and layout unchanged to System.
 unsafe impl GlobalAlloc for CountingAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        if ENABLED.load(Relaxed) {
-            BYTES.fetch_add(layout.size(), Relaxed);
+        if ENABLED.get() {
+            BYTES.set(BYTES.get() + layout.size());
         }
         unsafe { System.alloc(layout) }
     }
 
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
-        if ENABLED.load(Relaxed) {
-            BYTES.fetch_add(layout.size(), Relaxed);
+        if ENABLED.get() {
+            BYTES.set(BYTES.get() + layout.size());
         }
         unsafe { System.alloc_zeroed(layout) }
     }
 
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, size: usize) -> *mut u8 {
-        if ENABLED.load(Relaxed) {
-            BYTES.fetch_add(size, Relaxed);
+        if ENABLED.get() {
+            BYTES.set(BYTES.get() + size);
         }
         unsafe { System.realloc(ptr, layout, size) }
     }
@@ -40,15 +42,15 @@ unsafe impl GlobalAlloc for CountingAllocator {
 static ALLOCATOR: CountingAllocator = CountingAllocator;
 
 fn allocated_bytes(render: impl FnOnce()) -> usize {
-    BYTES.store(0, Relaxed);
-    ENABLED.store(true, Relaxed);
+    BYTES.set(0);
+    ENABLED.set(true);
     render();
-    ENABLED.store(false, Relaxed);
-    BYTES.load(Relaxed)
+    ENABLED.set(false);
+    BYTES.get()
 }
 
-// Keep this in its own integration-test binary so unrelated test threads do not
-// contaminate the allocator counters.
+// Count only this thread: the test harness can allocate concurrently even in
+// a binary with a single test.
 #[test]
 fn warm_cached_frame_avoids_surface_allocation() {
     let theme = theme::parse("surface { width 360; height 64; }; scene {}").unwrap();

@@ -33,12 +33,24 @@ notify = "8"
 rustix = "1.1"
 
 [profile.release]
-# Size-optimised. The daemon renders 60fps OSDs which is well within
-# tiny-skia's perf even at opt-level=z, so we trade speed for binary size
-# uniformly across the workspace. lto=fat + codegen-units=1 unlocks
-# cross-crate inlining and dead-code elimination, biggest single win.
+# Keep clients and listeners small; rasterisation opts into speed below.
+# Fat LTO retains cross-crate inlining and dead-code elimination.
 opt-level = "z"
 lto = "fat"
 codegen-units = 1
 strip = "symbols"
 panic = "abort"
+
+# Rasterisation runs on every animated frame. Optimise the CPU renderer
+# without increasing optimisation levels for every listener and CLI dependency.
+[profile.release.package.awob-core]
+opt-level = 3
+
+[profile.release.package.tiny-skia]
+opt-level = 3
+
+[profile.release.package.tiny-skia-path]
+opt-level = 3
+
+[profile.release.package.resvg]
+opt-level = 3

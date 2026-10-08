@@ -20,4 +20,9 @@ png = "0.17"
 rustix = { workspace = true, features = ["fs"] }
 
 [dev-dependencies]
+divan = "0.1.21"
 tempfile = "3"
+
+[[bench]]
+name = "render"
+harness = false
