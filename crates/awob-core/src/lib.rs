@@ -12,6 +12,7 @@ pub mod bindings;
 pub mod colour;
 pub mod expr;
 pub mod icon;
+mod layout_cache;
 pub mod length;
 pub mod paths;
 pub mod render;
