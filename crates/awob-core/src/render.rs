@@ -43,6 +43,7 @@ pub struct Renderer {
     frame: Option<Pixmap>,
     z_order: Vec<usize>,
     layouts: LayoutCache,
+    background: Option<BackgroundRaster>,
 }
 
 impl Default for Renderer {
@@ -60,6 +61,7 @@ impl Renderer {
             frame: None,
             z_order: Vec::new(),
             layouts: LayoutCache::default(),
+            background: None,
         }
     }
 
@@ -100,7 +102,8 @@ impl Renderer {
     /// the theme directory did not change. Ordinary sends should not call this.
     ///
     /// Font discovery and the font database are preserved. This only resets
-    /// renderer-owned icon/shadow/layout caches and cosmic-text's glyph raster cache.
+    /// renderer-owned icon, shadow, background and layout caches, plus cosmic-text's
+    /// glyph raster cache.
     ///
     /// ```
     /// let mut renderer = awob_core::render::Renderer::new();
@@ -113,6 +116,7 @@ impl Renderer {
             text.clear_glyph_cache();
         }
         self.layouts.clear();
+        self.background = None;
     }
 
     /// Render the theme's scene against the given bindings into a pixmap.
@@ -196,9 +200,20 @@ impl Renderer {
         order.extend(0..theme.scene.elements.len());
         // The index tie-breaker preserves insertion order without sort scratch.
         order.sort_unstable_by_key(|&index| (theme.scene.elements[index].z(), index));
-        let result = order.iter().try_for_each(|&index| {
+        if order.is_empty() {
+            self.background = None;
+        }
+        let result = order.iter().enumerate().try_for_each(|(position, &index)| {
             let element = &theme.scene.elements[index];
             let alpha_mul = element_alpha_mul(element, show_elapsed);
+            if position == 0 {
+                if let Element::Rect(rect) = element
+                    && rect.common.animations.is_empty()
+                {
+                    return self.draw_background_rect(rect, &frame, bindings, alpha_mul, pixmap);
+                }
+                self.background = None;
+            }
             self.draw_element(element, &frame, bindings, alpha_mul, pixmap)
         });
         self.z_order = order;
@@ -240,12 +255,30 @@ struct Frame {
     h: f32,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 struct Box2 {
     x: f32,
     y: f32,
     w: f32,
     h: f32,
+}
+
+// A single first-element raster can be copied verbatim into the cleared frame.
+// Caching later layers would regroup alpha blending and could change pixels.
+const MAX_BACKGROUND_BYTES: usize = 4 * 1024 * 1024;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ResolvedRect {
+    bb: Box2,
+    radius: f32,
+    fill: Colour,
+    stroke: Option<(Colour, f32)>,
+    shadow: Option<(f32, f32, f32, Colour)>,
+}
+
+struct BackgroundRaster {
+    rect: ResolvedRect,
+    pixmap: Pixmap,
 }
 
 impl Renderer {
@@ -419,20 +452,79 @@ impl Renderer {
         alpha_mul: f32,
         pm: &mut Pixmap,
     ) -> Result<(), RenderError> {
-        if let Some(shadow_attr) = &r.shadow
-            && let Ok(s) = shadow_attr.render(b)
-            && let Some(spec) = crate::shadow::parse(&s)
+        let resolved = resolve_rect(r, frame, b, alpha_mul)?;
+        self.draw_resolved_rect(resolved, pm)
+    }
+
+    fn draw_background_rect(
+        &mut self,
+        r: &RectEl,
+        frame: &Frame,
+        b: &Bindings,
+        alpha_mul: f32,
+        pm: &mut Pixmap,
+    ) -> Result<(), RenderError> {
+        // Always resolve current bindings and public scene fields before a hit.
+        let rect = resolve_rect(r, frame, b, alpha_mul)?;
+        // Sharp, unshadowed fills are cheap; copying a whole surface for a tiny
+        // rectangle can be slower than drawing it directly.
+        let cacheable = (rect.radius > 0.0 || rect.shadow.is_some_and(|s| s.3.a > 0))
+            && pm
+                .data()
+                .len()
+                .saturating_add(std::mem::size_of::<BackgroundRaster>())
+                <= MAX_BACKGROUND_BYTES;
+        if cacheable
+            && let Some(cached) = &self.background
+            && cached.rect == rect
+            && cached.pixmap.width() == pm.width()
+            && cached.pixmap.height() == pm.height()
         {
-            let bb = resolve_box(&r.common, &r.size, frame, b)?;
-            let radius = r
-                .radius
-                .as_ref()
-                .map(|a| a.render_number(b))
-                .transpose()?
-                .unwrap_or(0.0) as f32;
-            self.draw_shadow(pm, bb, radius, spec)?;
+            pm.data_mut().copy_from_slice(cached.pixmap.data());
+            return Ok(());
         }
-        draw_rect(r, frame, b, alpha_mul, pm)
+        self.draw_resolved_rect(rect, pm)?;
+        if !cacheable {
+            self.background = None;
+        } else if let Some(cached) = &mut self.background
+            && cached.pixmap.width() == pm.width()
+            && cached.pixmap.height() == pm.height()
+        {
+            cached.rect = rect;
+            cached.pixmap.data_mut().copy_from_slice(pm.data());
+        } else {
+            self.background = None;
+            self.background = Some(BackgroundRaster {
+                rect,
+                pixmap: pm.clone(),
+            });
+        }
+        Ok(())
+    }
+
+    fn draw_resolved_rect(
+        &mut self,
+        rect: ResolvedRect,
+        pm: &mut Pixmap,
+    ) -> Result<(), RenderError> {
+        if let Some((offset_x, offset_y, blur_radius, colour)) = rect.shadow {
+            self.draw_shadow(
+                pm,
+                rect.bb,
+                rect.radius,
+                crate::shadow::ShadowSpec {
+                    offset_x,
+                    offset_y,
+                    blur_radius,
+                    colour,
+                },
+            )?;
+        }
+        fill_rounded_rect(pm, rect.bb, rect.radius, rect.fill);
+        if let Some((colour, width)) = rect.stroke {
+            stroke_rounded_rect(pm, rect.bb, rect.radius, width, colour);
+        }
+        Ok(())
     }
 
     fn draw_shadow(
@@ -518,13 +610,12 @@ fn blit_shadow_mask(
     }
 }
 
-fn draw_rect(
+fn resolve_rect(
     r: &RectEl,
     frame: &Frame,
     b: &Bindings,
     alpha_mul: f32,
-    pm: &mut Pixmap,
-) -> Result<(), RenderError> {
+) -> Result<ResolvedRect, RenderError> {
     let bb = resolve_box(&r.common, &r.size, frame, b)?;
     let radius = r
         .radius
@@ -537,19 +628,30 @@ fn draw_rect(
         .as_ref()
         .and_then(|a| try_render_colour(a, b))
         .unwrap_or(Colour::TRANSPARENT);
-    fill_rounded_rect(pm, bb, radius, with_alpha(fill, alpha_mul));
-    if let Some(stroke_attr) = &r.stroke
-        && let Some(stroke_color) = try_render_colour(stroke_attr, b)
-    {
-        let sw = r
+    let stroke = if let Some(colour) = r.stroke.as_ref().and_then(|a| try_render_colour(a, b)) {
+        let width = r
             .stroke_width
             .as_ref()
             .map(|a| a.render_number(b))
             .transpose()?
             .unwrap_or(1.0) as f32;
-        stroke_rounded_rect(pm, bb, radius, sw, with_alpha(stroke_color, alpha_mul));
-    }
-    Ok(())
+        Some((with_alpha(colour, alpha_mul), width))
+    } else {
+        None
+    };
+    let shadow = r
+        .shadow
+        .as_ref()
+        .and_then(|a| a.render(b).ok())
+        .and_then(|s| crate::shadow::parse(&s))
+        .map(|s| (s.offset_x, s.offset_y, s.blur_radius, s.colour));
+    Ok(ResolvedRect {
+        bb,
+        radius,
+        fill: with_alpha(fill, alpha_mul),
+        stroke,
+        shadow,
+    })
 }
 
 fn draw_bar(
@@ -1222,5 +1324,148 @@ scene {
                 .render_cached(&theme, &Bindings::default(), None)
                 .is_err()
         );
+    }
+
+    fn without_background_cache(
+        theme: &Theme,
+        b: &Bindings,
+        elapsed: Option<std::time::Duration>,
+    ) -> Pixmap {
+        let mut renderer = Renderer::new();
+        let mut pm = Pixmap::new(theme.surface.width.max(1), theme.surface.height.max(1)).unwrap();
+        let frame = Frame {
+            w: pm.width() as f32,
+            h: pm.height() as f32,
+        };
+        let mut elements: Vec<_> = theme.scene.elements.iter().collect();
+        elements.sort_by_key(|element| element.z());
+        for element in elements {
+            renderer
+                .draw_element(
+                    element,
+                    &frame,
+                    b,
+                    element_alpha_mul(element, elapsed),
+                    &mut pm,
+                )
+                .unwrap();
+        }
+        pm
+    }
+
+    #[test]
+    fn background_cache_tracks_resolved_mutations_and_preserves_composition() {
+        let mut theme = parse(r##"
+            surface { width 48; height 32 }
+            scene {
+                rect z=0 x=2 y=3 width=30 height=20 radius=4 fill="$bg" stroke="$fg" stroke-width=1 shadow="$shadow"
+                rect z=1 x=12 y=10 width=25 height=17 fill="rgba(0,255,0,0.4)"
+            }
+        "##).unwrap();
+        let mut b = make_bindings(&theme);
+        b.palette.insert(
+            "bg".into(),
+            Colour {
+                r: 200,
+                g: 20,
+                b: 100,
+                a: 160,
+            },
+        );
+        b.palette.insert("fg".into(), Colour::rgb(0, 0, 255));
+        b.set("shadow", Value::String("0 2 2 rgba(0,0,0,0.4)".into()));
+        let mut renderer = Renderer::new();
+        for step in 0..9 {
+            match step {
+                2 => {
+                    b.palette.insert(
+                        "bg".into(),
+                        Colour {
+                            r: 10,
+                            g: 70,
+                            b: 200,
+                            a: 50,
+                        },
+                    );
+                }
+                3 => {
+                    b.set("shadow", Value::String("2 0 4 #ff0000".into()));
+                }
+                4 => {
+                    if let Element::Rect(r) = &mut theme.scene.elements[0] {
+                        r.common.x = AttrValue::parse("8").unwrap();
+                        r.radius = Some(AttrValue::parse("7").unwrap());
+                    }
+                }
+                5 => {
+                    if let Element::Rect(r) = &mut theme.scene.elements[0] {
+                        r.size.width = AttrValue::parse("20").unwrap();
+                        r.stroke_width = Some(AttrValue::parse("3").unwrap());
+                    }
+                }
+                6 => {
+                    if let Element::Rect(r) = &mut theme.scene.elements[0] {
+                        r.common.z = 2;
+                    }
+                }
+                7 => {
+                    theme.surface.width = 60;
+                }
+                8 => {
+                    theme.scene.elements.clear();
+                }
+                _ => {}
+            }
+            let expected = without_background_cache(&theme, &b, None);
+            let actual = renderer.render_cached(&theme, &b, None).unwrap();
+            assert_eq!(actual.data(), expected.data(), "mutation step {step}");
+        }
+        assert!(renderer.background.is_none());
+    }
+
+    #[test]
+    fn background_cache_bypasses_animation_and_large_surfaces() {
+        let mut theme = parse(
+            r##"
+            surface { width 32; height 24 }
+            scene { rect x=0 y=0 width=32 height=24 radius=3 fill="#ff0000" pulse=#true }
+        "##,
+        )
+        .unwrap();
+        let b = make_bindings(&theme);
+        let mut renderer = Renderer::new();
+        for millis in [0, 50, 250, 600] {
+            let elapsed = Some(std::time::Duration::from_millis(millis));
+            let expected = without_background_cache(&theme, &b, elapsed);
+            assert_eq!(
+                renderer.render_cached(&theme, &b, elapsed).unwrap().data(),
+                expected.data()
+            );
+            assert!(renderer.background.is_none());
+        }
+        if let Element::Rect(r) = &mut theme.scene.elements[0] {
+            r.common.animations.clear();
+        }
+        renderer.render_cached(&theme, &b, None).unwrap();
+        assert!(
+            renderer
+                .background
+                .as_ref()
+                .is_some_and(|cache| cache.pixmap.data().len()
+                    + std::mem::size_of::<BackgroundRaster>()
+                    <= MAX_BACKGROUND_BYTES)
+        );
+        let animated = parse(r##"surface { width 32; height 24 }; scene { rect width=32 height=24 radius=3 fill="#ff0000" pulse=#true }"##).unwrap();
+        renderer
+            .render_cached(&animated, &b, Some(std::time::Duration::from_millis(50)))
+            .unwrap();
+        assert!(renderer.background.is_none());
+        renderer.render_cached(&theme, &b, None).unwrap();
+        renderer.invalidate_caches();
+        assert!(renderer.background.is_none());
+        theme.surface.width = 1025;
+        theme.surface.height = 1024;
+        renderer.render_cached(&theme, &b, None).unwrap();
+        assert!(renderer.background.is_none());
     }
 }
