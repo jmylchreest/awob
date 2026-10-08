@@ -42,6 +42,17 @@ this automatically on `Client::connect()`.
 | `Reload` | Reread current theme files. |
 | `Version` | Get daemon version + protocol number. |
 
+The daemon admits up to 64 active client connections. Further connections receive
+an `Error` saying `daemon busy: active connection limit reached` and are closed.
+Idle persistent connections stay open and count toward the limit.
+
+Once a client starts a request, it has two seconds to finish the existing maximum
+64 KiB JSON line. Each response also has a two-second total write deadline.
+Sending occasional bytes does not extend these deadlines. A timeout closes the
+connection; theme loading and other request processing are separate from the I/O
+budgets. Clients must not replay requests whose outcome is unknown after a lost
+connection.
+
 ## Responses
 
 | Variant | Purpose |
