@@ -17,7 +17,7 @@ use std::rc::Rc;
 use std::sync::mpsc;
 
 use awob_client::listener::ChangeFilter;
-use awob_client::{Client, Send};
+use awob_client::{ReconnectingClient, Send};
 use clap::Parser;
 use pipewire as pw;
 use pw::types::ObjectType;
@@ -108,7 +108,7 @@ pub struct AudioState {
     reason = "OSD send-site naturally takes value/state/labels/icon — folding into a struct hurts call-site readability"
 )]
 pub fn emit_osd(
-    socket: &Option<PathBuf>,
+    client: &mut ReconnectingClient,
     source: &str,
     channel: Channel,
     kind: NodeKind,
@@ -133,7 +133,6 @@ pub fn emit_osd(
     if state.muted && mute_volume_zero {
         value = 0.0;
     }
-    let mut c = Client::connect_or_default(socket.as_deref())?;
     let s = Send::new(event, value)
         .max(1.0)
         .listener_id(listener_id)
@@ -145,7 +144,7 @@ pub fn emit_osd(
         // (volume keys, media-key pavucontrol scroll). Hot-swap whatever
         // ambient bar happens to be visible.
         .preempt(true);
-    c.send(s.build())
+    client.send(s.build())
 }
 
 /// `value` is 0..1 (or higher for boost). Returns `(icon, style)`.
@@ -302,9 +301,10 @@ fn spawn_io_worker(
     std::thread::Builder::new()
         .name("awob-pw-io".into())
         .spawn(move || {
+            let mut client = ReconnectingClient::new(socket);
             while let Ok(ev) = rx.recv() {
                 if let Err(e) = emit_osd(
-                    &socket,
+                    &mut client,
                     &ev.source,
                     ev.channel,
                     ev.kind,

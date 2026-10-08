@@ -10,7 +10,7 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use awob_client::listener::{ChangeFilter, wait_for_resource};
-use awob_client::{Client, Send};
+use awob_client::{ReconnectingClient, Send};
 use clap::Parser;
 use notify::{Event, EventKind, RecursiveMode, Watcher};
 
@@ -105,6 +105,7 @@ fn presentation(profile: &str) -> (f64, String, &'static str, &'static str) {
 }
 
 fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
+    let mut client = ReconnectingClient::new(cli.socket.clone());
     let path = wait_for_attribute();
     tracing::info!("source={SOURCE} path={}", path.display());
 
@@ -136,7 +137,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             continue;
         };
         if filter.changed((), &current)
-            && let Err(e) = emit_osd(&cli.socket, &current)
+            && let Err(e) = emit_osd(&mut client, &current)
         {
             tracing::info!("send: {e}");
         }
@@ -144,9 +145,8 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn emit_osd(socket: &Option<PathBuf>, profile: &str) -> awob_client::Result<()> {
+fn emit_osd(client: &mut ReconnectingClient, profile: &str) -> awob_client::Result<()> {
     let (value, label, icon, style) = presentation(profile);
-    let mut c = Client::connect_or_default(socket.as_deref())?;
     let s = Send::new("power-profile", value)
         .max(1.0)
         .listener_id(LISTENER_ID)
@@ -157,7 +157,7 @@ fn emit_osd(socket: &Option<PathBuf>, profile: &str) -> awob_client::Result<()> 
         // Power-profile changes are user-driven (Fn-key, settings panel),
         // so hot-swap whatever's on screen.
         .preempt(true);
-    c.send(s.build())
+    client.send(s.build())
 }
 
 fn main() -> ExitCode {

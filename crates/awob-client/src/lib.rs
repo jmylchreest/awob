@@ -90,20 +90,35 @@ impl Client {
     }
 
     fn request(&mut self, req: &Request) -> Result<Response> {
+        self.request_line(&Self::encode_request(req)?)
+            .map_err(|failure| failure.error)
+    }
+
+    fn encode_request(req: &Request) -> Result<Vec<u8>> {
         let mut line = serde_json::to_vec(req)?;
         line.push(b'\n');
-        self.stream.write_all(&line)?;
-        self.stream.flush()?;
-        let mut buf = String::new();
-        let n = self.reader.read_line(&mut buf)?;
-        if n == 0 {
-            return Err(Error::Disconnected);
-        }
-        let resp: Response = serde_json::from_str(buf.trim_end())?;
-        match resp {
-            Response::Error { message } => Err(Error::Daemon(message)),
-            other => Ok(other),
-        }
+        Ok(line)
+    }
+
+    fn request_line(&mut self, line: &[u8]) -> std::result::Result<Response, RequestFailure> {
+        write_request(&mut self.stream, line)?;
+        // From here on the daemon may already have processed the event. Neither
+        // timeouts nor a lost acknowledgement make it safe to replay the request.
+        let response = (|| {
+            let mut buf = String::new();
+            if self.reader.read_line(&mut buf)? == 0 {
+                return Err(Error::Disconnected);
+            }
+            let resp: Response = serde_json::from_str(buf.trim_end())?;
+            match resp {
+                Response::Error { message } => Err(Error::Daemon(message)),
+                other => Ok(other),
+            }
+        })();
+        response.map_err(|error| RequestFailure {
+            error,
+            retry_safe: false,
+        })
     }
 
     /// Negotiate protocol version. Returns daemon version string on success.
@@ -188,6 +203,109 @@ impl Client {
             other => Err(Error::UnexpectedResponse(other)),
         }
     }
+}
+
+/// Lazy connection for long-running listeners, reused between events.
+///
+/// A disconnected socket is reconnected once only if no request bytes were
+/// written. Ambiguous failures are returned without replaying the event; the
+/// following event opens a new connection.
+///
+/// ```no_run
+/// use awob_client::{ReconnectingClient, Send};
+/// let mut client = ReconnectingClient::new(None);
+/// client.send(Send::new("volume", 50.0).build())?;
+/// client.send(Send::new("volume", 60.0).build())?;
+/// # Ok::<(), awob_client::Error>(())
+/// ```
+pub struct ReconnectingClient {
+    socket: Option<PathBuf>,
+    client: Option<Client>,
+}
+
+impl ReconnectingClient {
+    /// Remember an optional socket override; connect on the first event.
+    ///
+    /// ```
+    /// let client = awob_client::ReconnectingClient::new(None);
+    /// ```
+    pub const fn new(socket: Option<PathBuf>) -> Self {
+        Self {
+            socket,
+            client: None,
+        }
+    }
+
+    /// Send one event, preserving at-most-once delivery across reconnects.
+    ///
+    /// Errors are returned to the caller. A failure after any bytes were written
+    /// is never retried, since the daemon may have displayed the event already.
+    ///
+    /// ```no_run
+    /// let mut client = awob_client::ReconnectingClient::new(None);
+    /// client.send(awob_client::Send::new("brightness", 75.0).build())?;
+    /// # Ok::<(), awob_client::Error>(())
+    /// ```
+    pub fn send(&mut self, payload: SendPayload) -> Result<()> {
+        let line = Client::encode_request(&Request::Send(payload))?;
+        if self.client.is_none() {
+            self.client = Some(Client::connect_or_default(self.socket.as_deref())?);
+        }
+        let result = self
+            .client
+            .as_mut()
+            .expect("connection initialized")
+            .request_line(&line);
+        let result = match result {
+            Err(failure) if failure.retry_safe => {
+                self.client = None;
+                let mut client = Client::connect_or_default(self.socket.as_deref())?;
+                let result = client.request_line(&line);
+                self.client = Some(client);
+                result
+            }
+            result => result,
+        };
+        let result = match result {
+            Ok(Response::Ok) => Ok(()),
+            Ok(other) => Err(Error::UnexpectedResponse(other)),
+            Err(failure) => Err(failure.error),
+        };
+        if result.is_err() {
+            self.client = None;
+        }
+        result
+    }
+}
+
+struct RequestFailure {
+    error: Error,
+    retry_safe: bool,
+}
+
+/// Track writes instead of interpreting a socket error as evidence of delivery.
+/// Even a partial JSON line makes retry unsafe; only zero-byte failures qualify.
+fn write_request(writer: &mut impl Write, line: &[u8]) -> std::result::Result<(), RequestFailure> {
+    let mut written = 0;
+    while written < line.len() {
+        let error = match writer.write(&line[written..]) {
+            Ok(0) => std::io::Error::from(std::io::ErrorKind::WriteZero),
+            Ok(n) => {
+                written += n;
+                continue;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => e,
+        };
+        return Err(RequestFailure {
+            error: error.into(),
+            retry_safe: written == 0,
+        });
+    }
+    writer.flush().map_err(|error| RequestFailure {
+        error: error.into(),
+        retry_safe: false,
+    })
 }
 
 #[derive(Debug)]
@@ -331,5 +449,127 @@ mod tests {
         let mut c = Client::connect_to(&sock).unwrap();
         let err = c.send(Send::new("v", 1.0).build()).unwrap_err();
         assert!(matches!(err, Error::Daemon(m) if m == "no theme"));
+    }
+    fn serve_events(
+        listener: UnixListener,
+        values: Vec<f64>,
+        acknowledge: bool,
+    ) -> thread::JoinHandle<()> {
+        thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            for expected in values {
+                let mut line = String::new();
+                assert!(reader.read_line(&mut line).unwrap() > 0);
+                let Request::Send(payload) = serde_json::from_str(&line).unwrap() else {
+                    panic!("expected send");
+                };
+                assert_eq!(payload.value, expected);
+                if acknowledge {
+                    stream.write_all(b"{\"type\":\"ok\"}\n").unwrap();
+                }
+            }
+        })
+    }
+
+    #[test]
+    fn reconnecting_client_reuses_one_connection() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("socket");
+        let listener = UnixListener::bind(&path).unwrap();
+        let worker = serve_events(listener, vec![1.0, 2.0], true);
+        let mut client = ReconnectingClient::new(Some(path));
+        client.send(Send::new("v", 1.0).build()).unwrap();
+        client.send(Send::new("v", 2.0).build()).unwrap();
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn reconnecting_client_delivers_first_event_after_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("socket");
+        let worker = serve_events(UnixListener::bind(&path).unwrap(), vec![1.0], true);
+        let mut client = ReconnectingClient::new(Some(path.clone()));
+        client.send(Send::new("v", 1.0).build()).unwrap();
+        worker.join().unwrap(); // old peer is closed before the next event
+        std::fs::remove_file(&path).unwrap();
+        let worker = serve_events(UnixListener::bind(&path).unwrap(), vec![2.0], true);
+        client.send(Send::new("v", 2.0).build()).unwrap();
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn reconnecting_client_never_replays_unacknowledged_event() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("socket");
+        let listener = UnixListener::bind(&path).unwrap();
+        let worker = serve_events(listener.try_clone().unwrap(), vec![1.0], false);
+        let mut client = ReconnectingClient::new(Some(path));
+        assert!(matches!(
+            client.send(Send::new("v", 1.0).build()),
+            Err(Error::Disconnected)
+        ));
+        worker.join().unwrap();
+        listener.set_nonblocking(true).unwrap();
+        assert!(matches!(listener.accept(), Err(e) if e.kind() == std::io::ErrorKind::WouldBlock));
+        listener.set_nonblocking(false).unwrap();
+        let worker = serve_events(listener, vec![2.0], true);
+        client.send(Send::new("v", 2.0).build()).unwrap();
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn reconnecting_client_recovers_after_initial_connection_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("socket");
+        let mut client = ReconnectingClient::new(Some(path.clone()));
+        assert!(matches!(
+            client.send(Send::new("v", 1.0).build()),
+            Err(Error::SocketMissing(_))
+        ));
+        let worker = serve_events(UnixListener::bind(&path).unwrap(), vec![2.0], true);
+        client.send(Send::new("v", 2.0).build()).unwrap();
+        worker.join().unwrap();
+    }
+
+    struct FailingWriter {
+        bytes_left: usize,
+        fail_flush: bool,
+    }
+
+    impl Write for FailingWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            if self.bytes_left == 0 {
+                return Err(std::io::ErrorKind::BrokenPipe.into());
+            }
+            let written = bytes.len().min(self.bytes_left);
+            self.bytes_left -= written;
+            Ok(written)
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            if self.fail_flush {
+                Err(std::io::ErrorKind::BrokenPipe.into())
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    #[test]
+    fn request_write_failure_is_retryable_only_before_first_byte() {
+        for (bytes_left, fail_flush, retry_safe) in
+            [(0, false, true), (3, false, false), (100, true, false)]
+        {
+            let mut writer = FailingWriter {
+                bytes_left,
+                fail_flush,
+            };
+            let failure = write_request(&mut writer, b"request\n").unwrap_err();
+            assert_eq!(failure.retry_safe, retry_safe);
+        }
     }
 }

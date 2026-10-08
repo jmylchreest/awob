@@ -31,7 +31,7 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use awob_client::listener::{ChangeFilter, wait_for_resource};
-use awob_client::{Client, Send};
+use awob_client::{ReconnectingClient, Send};
 use clap::Parser;
 use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
 use notify::{Event, EventKind, RecursiveMode, Watcher};
@@ -146,6 +146,7 @@ fn wait_for_device(explicit: Option<&str>) -> PathBuf {
 }
 
 fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
+    let mut client = ReconnectingClient::new(cli.socket.clone());
     let dir = wait_for_device(cli.device.as_deref());
     let brightness_path = dir.join("brightness");
     let max_path = dir.join("max_brightness");
@@ -224,15 +225,17 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         let Ok(current) = read_u32(&brightness_path) else {
             continue;
         };
-        if filter.changed((), &current) {
-            let _ = emit_osd(
-                &cli.socket,
+        if filter.changed((), &current)
+            && let Err(e) = emit_osd(
+                &mut client,
                 &source,
                 &device_name,
                 &label,
                 current as f64,
                 max,
-            );
+            )
+        {
+            tracing::info!("send: {e}");
         }
     }
     Ok(())
@@ -262,14 +265,13 @@ fn run_udev(want_device: &str, tx: mpsc::Sender<()>) -> Result<(), Box<dyn std::
 }
 
 fn emit_osd(
-    socket: &Option<PathBuf>,
+    client: &mut ReconnectingClient,
     source: &str,
     device: &str,
     label: &str,
     value: f64,
     max: f64,
 ) -> awob_client::Result<()> {
-    let mut c = Client::connect_or_default(socket.as_deref())?;
     let s = Send::new("keyboard-backlight", value)
         .listener_id(listener_id_for(device))
         .source(source)
@@ -278,7 +280,7 @@ fn emit_osd(
         .app(label)
         // Keyboard-backlight is fn-key driven; treat as interactive.
         .preempt(true);
-    c.send(s.build())
+    client.send(s.build())
 }
 
 fn main() -> ExitCode {
