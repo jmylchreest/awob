@@ -17,6 +17,7 @@ cosmic-text = "0.19"
 resvg = "0.48"
 usvg = "0.48"
 png = "0.17"
+rustix = { workspace = true, features = ["fs"] }
 
 [dev-dependencies]
 tempfile = "3"

@@ -124,6 +124,7 @@ dependencies = [
  "kdl",
  "png 0.17.16",
  "resvg",
+ "rustix",
  "tempfile",
  "thiserror",
  "tiny-skia",
