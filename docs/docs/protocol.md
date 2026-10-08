@@ -20,6 +20,16 @@ directly.
   response, repeat. No multiplexing, no streaming responses.
 * `serde`-tagged enum: every JSON object has a `"type"` discriminator.
 
+The socket's parent must be a real directory owned by the daemon's user, with
+no group or other permissions (normally mode `0700`). Missing parent directories
+are created with mode `0700`; existing directories are never chmodded. This also
+applies to custom socket paths: use a private directory, not `/tmp/awob.sock`.
+The socket is published with mode `0600`.
+
+Startup refuses symlinks, ordinary files and sockets owned by another user at
+the chosen path. It only replaces a stale socket owned by the daemon's user.
+Shutdown removes the socket it created and leaves replacement entries alone.
+
 Connection lifetime is up to the client. Listeners typically hold a
 long-lived connection; CLI invocations connect, send, disconnect.
 

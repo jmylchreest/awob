@@ -33,7 +33,7 @@ smithay-client-toolkit = "0.21"
 wayland-client = "0.31"
 calloop = "0.14"
 calloop-wayland-source = "0.4"
-rustix = { workspace = true, features = ["fs"] }
+rustix = { workspace = true, features = ["fs", "process"] }
 nix = { workspace = true, features = ["signal", "process"] }
 
 [dev-dependencies]

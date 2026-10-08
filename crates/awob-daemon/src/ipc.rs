@@ -2,13 +2,12 @@
 //!
 //! Wire format: JSON-lines of [`Request`] / [`Response`] over a stream socket
 //! at `$XDG_RUNTIME_DIR/awob.sock`. The socket and its parent directory are
-//! locked to the running user (mode 700). Connections are short-lived: the
-//! client sends one or more requests, the daemon replies one-for-one, and
-//! either side may hang up at any time.
+//! restricted to the running user (socket mode 600, private parent). The client
+//! sends one or more requests, the daemon replies one-for-one, and either side
+//! may hang up at any time.
 
 use std::io::{BufRead, BufReader, Write};
-use std::os::unix::fs::PermissionsExt;
-use std::os::unix::net::{UnixListener, UnixStream};
+use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::{
     Arc,
@@ -98,6 +97,8 @@ pub enum IpcError {
         #[source]
         source: std::io::Error,
     },
+    #[error("unsafe IPC path {path}: {reason}")]
+    UnsafePath { path: PathBuf, reason: &'static str },
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
 }
@@ -107,67 +108,7 @@ pub fn default_socket_path() -> Result<PathBuf, IpcError> {
     Ok(Path::new(&dir).join(DEFAULT_SOCKET_NAME))
 }
 
-pub struct Server {
-    listener: UnixListener,
-    path: PathBuf,
-}
-
-impl Server {
-    pub fn bind(path: PathBuf) -> Result<Self, IpcError> {
-        // Reuse-the-socket dance. If a file exists at the bind path we have
-        // to figure out whether it's a *live* daemon (someone's actually
-        // accept()-ing on the other end — we should bail) or a *stale*
-        // file left behind by a previous instance that died without
-        // cleanup (we should unlink and rebind). The probe is a connect();
-        // success means live. Only errors we treat as stale are
-        // ConnectionRefused (no one accept()ing) and NotFound (file gone
-        // between exists() and connect()).
-        if path.exists() {
-            match UnixStream::connect(&path) {
-                Ok(_) => return Err(IpcError::AlreadyRunning { path }),
-                Err(e)
-                    if matches!(
-                        e.kind(),
-                        std::io::ErrorKind::ConnectionRefused | std::io::ErrorKind::NotFound
-                    ) =>
-                {
-                    if let Err(unlink_err) = std::fs::remove_file(&path) {
-                        return Err(IpcError::StaleSocketUnlink {
-                            path,
-                            source: unlink_err,
-                        });
-                    }
-                }
-                Err(e) => {
-                    return Err(IpcError::Bind { path, source: e });
-                }
-            }
-        }
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        let listener = UnixListener::bind(&path).map_err(|e| IpcError::Bind {
-            path: path.clone(),
-            source: e,
-        })?;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700))?;
-        Ok(Self { listener, path })
-    }
-
-    pub fn path(&self) -> &Path {
-        &self.path
-    }
-
-    pub fn try_clone_listener(&self) -> Result<UnixListener, IpcError> {
-        Ok(self.listener.try_clone()?)
-    }
-}
-
-impl Drop for Server {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.path);
-    }
-}
+pub use crate::socket_path::Server;
 
 /// Read all newline-delimited JSON requests from a stream and dispatch each
 /// through `handler`, writing the [`Response`] back as a single JSON line.
@@ -304,11 +245,164 @@ fn write_with_deadline(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::net::UnixListener;
     use std::thread;
+
+    fn private_tempdir() -> tempfile::TempDir {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        directory
+    }
+
+    #[test]
+    fn socket_rejects_non_socket_and_symlink_without_removing_them() {
+        use std::os::unix::fs::symlink;
+        let dir = private_tempdir();
+        let file = dir.path().join("file");
+        std::fs::write(&file, "keep me").unwrap();
+        assert!(Server::bind(file.clone()).is_err());
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "keep me");
+        let link = dir.path().join("link");
+        symlink(&file, &link).unwrap();
+        assert!(Server::bind(link.clone()).is_err());
+        assert!(
+            std::fs::symlink_metadata(link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        let dangling = dir.path().join("dangling");
+        symlink(dir.path().join("missing"), &dangling).unwrap();
+        assert!(Server::bind(dangling.clone()).is_err());
+        assert!(
+            std::fs::symlink_metadata(dangling)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+    }
+
+    #[test]
+    fn socket_rejects_shared_or_symlink_parent() {
+        use std::os::unix::fs::symlink;
+        let dir = private_tempdir();
+        let shared = dir.path().join("shared");
+        std::fs::create_dir(&shared).unwrap();
+        std::fs::set_permissions(&shared, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(Server::bind(shared.join("a.sock")).is_err());
+        assert_eq!(
+            std::fs::metadata(&shared).unwrap().permissions().mode() & 0o777,
+            0o755
+        );
+        let link = dir.path().join("link");
+        symlink(dir.path(), &link).unwrap();
+        assert!(Server::bind(link.join("a.sock")).is_err());
+    }
+
+    #[test]
+    fn socket_creates_private_parent_and_restrictive_socket() {
+        let dir = private_tempdir();
+        let parent = dir.path().join("new").join("nested");
+        let path = parent.join("a.sock");
+        let server = Server::bind(path.clone()).unwrap();
+        assert_eq!(
+            std::fs::metadata(&parent).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert_eq!(std::fs::read_dir(&parent).unwrap().count(), 1);
+        assert!(UnixStream::connect(server.path()).is_ok());
+    }
+
+    #[test]
+    fn socket_recovers_stale_socket_but_preserves_live_one() {
+        let dir = private_tempdir();
+        let path = dir.path().join("a.sock");
+        drop(UnixListener::bind(&path).unwrap());
+        let server = Server::bind(path.clone()).unwrap();
+        assert!(matches!(
+            Server::bind(path.clone()),
+            Err(IpcError::AlreadyRunning { .. })
+        ));
+        assert!(UnixStream::connect(server.path()).is_ok());
+    }
+
+    #[test]
+    fn socket_drop_preserves_replacement_file_and_socket() {
+        let dir = private_tempdir();
+        let path = dir.path().join("a.sock");
+        let server = Server::bind(path.clone()).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        std::fs::write(&path, "replacement").unwrap();
+        drop(server);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "replacement");
+        std::fs::remove_file(&path).unwrap();
+        let server = Server::bind(path.clone()).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        let replacement = UnixListener::bind(&path).unwrap();
+        drop(server);
+        assert!(UnixStream::connect(&path).is_ok());
+        drop(replacement);
+    }
+
+    #[test]
+    fn socket_drop_uses_original_parent_after_directory_replacement() {
+        let dir = private_tempdir();
+        let parent = dir.path().join("original");
+        let path = parent.join("a.sock");
+        let server = Server::bind(path.clone()).unwrap();
+        let moved = dir.path().join("moved");
+        std::fs::rename(&parent, &moved).unwrap();
+        std::fs::create_dir(&parent).unwrap();
+        std::fs::write(&path, "replacement").unwrap();
+        drop(server);
+        assert!(!moved.join("a.sock").exists());
+        assert_eq!(std::fs::read_to_string(path).unwrap(), "replacement");
+    }
+
+    #[test]
+    fn socket_concurrent_startup_keeps_one_listener_and_cleans_staging() {
+        let dir = private_tempdir();
+        let path = dir.path().join("a.sock");
+        let barrier = Arc::new(std::sync::Barrier::new(8));
+        let workers: Vec<_> = (0..8)
+            .map(|_| {
+                let path = path.clone();
+                let barrier = Arc::clone(&barrier);
+                thread::spawn(move || {
+                    barrier.wait();
+                    Server::bind(path)
+                })
+            })
+            .collect();
+        let servers: Vec<_> = workers
+            .into_iter()
+            .filter_map(|worker| worker.join().unwrap().ok())
+            .collect();
+        assert_eq!(servers.len(), 1);
+        assert!(UnixStream::connect(&path).is_ok());
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+        drop(servers);
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn socket_binding_preserves_maximum_path_length() {
+        use std::os::unix::ffi::OsStrExt;
+        let dir = private_tempdir();
+        let filename = "s".repeat(107 - dir.path().as_os_str().as_bytes().len() - 1);
+        let path = dir.path().join(filename);
+        let server = Server::bind(path).unwrap();
+        assert!(UnixStream::connect(server.path()).is_ok());
+    }
 
     #[test]
     fn server_bind_drop_removes_socket() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = private_tempdir();
         let p = dir.path().join("test.sock");
         {
             let s = Server::bind(p.clone()).unwrap();
@@ -320,7 +414,7 @@ mod tests {
 
     #[test]
     fn serve_round_trip() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = private_tempdir();
         let p = dir.path().join("rt.sock");
         let server = Server::bind(p.clone()).unwrap();
         let listener = server.try_clone_listener().unwrap();
@@ -348,7 +442,7 @@ mod tests {
 
     #[test]
     fn serve_rejects_oversize_line() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = private_tempdir();
         let p = dir.path().join("over.sock");
         let server = Server::bind(p.clone()).unwrap();
         let listener = server.try_clone_listener().unwrap();
