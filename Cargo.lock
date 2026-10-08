@@ -221,6 +221,7 @@ dependencies = [
  "awob-client",
  "clap",
  "nix",
+ "tempfile",
  "tracing",
 ]
 
