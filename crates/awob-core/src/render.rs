@@ -14,6 +14,7 @@ use crate::bindings::Bindings;
 use crate::colour::Colour;
 use crate::expr::ExprError;
 use crate::icon::IconResolver;
+use crate::layout_cache::{LayoutCache, LayoutEntry};
 use crate::scene::*;
 use crate::text::{FontSpec, TextRenderer};
 use crate::theme::Theme;
@@ -37,6 +38,7 @@ pub struct Renderer {
     shadows: crate::shadow::ShadowCache,
     frame: Option<Pixmap>,
     z_order: Vec<usize>,
+    layouts: LayoutCache,
 }
 
 impl Default for Renderer {
@@ -53,6 +55,7 @@ impl Renderer {
             shadows: crate::shadow::ShadowCache::new(),
             frame: None,
             z_order: Vec::new(),
+            layouts: LayoutCache::default(),
         }
     }
 
@@ -66,7 +69,7 @@ impl Renderer {
     /// the theme directory did not change. Ordinary sends should not call this.
     ///
     /// Font discovery and the font database are preserved. This only resets
-    /// renderer-owned icon/shadow caches and cosmic-text's glyph raster cache.
+    /// renderer-owned icon/shadow/layout caches and cosmic-text's glyph raster cache.
     ///
     /// ```
     /// let mut renderer = awob_core::render::Renderer::new();
@@ -76,6 +79,7 @@ impl Renderer {
         self.icons.clear_cache();
         self.shadows.clear();
         self.text.clear_glyph_cache();
+        self.layouts.clear();
     }
 
     /// Render the theme's scene against the given bindings into a pixmap.
@@ -238,12 +242,17 @@ impl Renderer {
         if label.is_empty() {
             return Ok(());
         }
-        let font_spec = match &t.font {
-            Some(f) => FontSpec::parse(f),
-            None => FontSpec::default(),
+        let mut layout = if let Some(cached) = self.layouts.take(&label, t.font.as_deref()) {
+            cached
+        } else {
+            let font_spec = match &t.font {
+                Some(f) => FontSpec::parse(f),
+                None => FontSpec::default(),
+            };
+            let buffer = self.text.shape(&label, &font_spec);
+            LayoutEntry::new(label, t.font.clone(), buffer)
         };
-        let mut buffer = self.text.shape(&label, &font_spec);
-        let (text_w, text_h) = TextRenderer::measure_shaped(&buffer);
+        let (text_w, text_h) = TextRenderer::measure_shaped(&layout.buffer);
         let bb_x = resolve_x(&t.common, frame, b, text_w)?;
         let bb_y = resolve_y(&t.common, frame, b, text_h)?;
         let colour = t
@@ -251,8 +260,14 @@ impl Renderer {
             .as_ref()
             .and_then(|a| try_render_colour(a, b))
             .unwrap_or(Colour::rgb(0xff, 0xff, 0xff));
-        self.text
-            .draw_shaped(pm, bb_x, bb_y, &mut buffer, with_alpha(colour, alpha_mul));
+        self.text.draw_shaped(
+            pm,
+            bb_x,
+            bb_y,
+            &mut layout.buffer,
+            with_alpha(colour, alpha_mul),
+        );
+        self.layouts.insert(layout);
         Ok(())
     }
 
@@ -1037,5 +1052,59 @@ scene {
         let actual = renderer.render_cached(&theme, &b, None).unwrap();
         assert_eq!(actual.data(), expected.data());
         assert!(!renderer.shadows.has_transient());
+    }
+
+    #[test]
+    fn cached_text_tracks_text_font_position_colour_and_reload_changes() {
+        let mut theme = parse(
+            r##"
+            surface { width 180; height 48 }
+            scene {
+                text value="$app" x=2 y=3 font="sans-serif 14" colour="$fg"
+            }
+        "##,
+        )
+        .unwrap();
+        let mut b = make_bindings(&theme);
+        let mut renderer = Renderer::new();
+        for (label, font, x, colour) in [
+            ("Volume", "sans-serif 14", 2, Colour::rgb(255, 255, 255)),
+            ("Volume", "sans-serif 14", 8, Colour::rgb(255, 0, 0)),
+            ("Mute", "sans-serif 14", 8, Colour::rgb(255, 0, 0)),
+            ("Mute", "monospace 20", 4, Colour::rgb(0, 0, 255)),
+            ("Volume", "sans-serif 14", 2, Colour::rgb(255, 255, 255)),
+        ] {
+            b.set("app", Value::String(label.into()));
+            b.palette.insert("fg".into(), colour);
+            if let Element::Text(text) = &mut theme.scene.elements[0] {
+                text.font = Some(font.into());
+                text.common.x = AttrValue::parse(x.to_string()).unwrap();
+            }
+            let expected = Renderer::new().render(&theme, &b, None).unwrap();
+            let actual = renderer.render_cached(&theme, &b, None).unwrap();
+            assert_eq!(actual.data(), expected.data(), "{label}, {font}");
+        }
+        assert_eq!(renderer.layouts.len(), 3);
+        renderer.invalidate_caches();
+        assert_eq!(renderer.layouts.len(), 0);
+    }
+
+    #[test]
+    fn long_labels_render_without_entering_layout_cache() {
+        let theme = parse(
+            r##"
+            surface { width 180; height 48 }
+            scene { text value="$app" x=2 y=3 font="sans-serif 14" }
+        "##,
+        )
+        .unwrap();
+        let mut b = make_bindings(&theme);
+        b.set("app", Value::String("long label ".repeat(60)));
+        let mut renderer = Renderer::new();
+        let first = renderer.render(&theme, &b, None).unwrap();
+        assert!(first.data().as_chunks::<4>().0.iter().any(|px| px[3] > 0));
+        let repeated = renderer.render_cached(&theme, &b, None).unwrap();
+        assert_eq!(repeated.data(), first.data());
+        assert_eq!(renderer.layouts.len(), 0);
     }
 }
