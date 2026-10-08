@@ -32,3 +32,5 @@ On a Ryzen 7 9800X3D with Rust 1.98.1, this benchmark measured default frames at
 with the selective speed settings. The stripped daemon grew from 5,711,344 to
 5,845,984 bytes (2.4%). These measurements precede the separate render-storage
 reuse change and are not a promise of the same speedup on every machine.
+
+The suite includes `warm_frame` for the owned-pixmap API and `warm_cached_frame` for the borrowed frame used by the daemon. Both reuse one warmed renderer and a fixed inline icon across four shipped themes. The earlier profile comparison above predates the renderer caches.

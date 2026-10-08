@@ -14,8 +14,7 @@ fn main() {
     divan::main();
 }
 
-#[divan::bench(args = ["default", "wob", "console", "minimal"])]
-fn warm_frame(bencher: Bencher, name: &str) {
+fn setup(name: &str) -> (Renderer, theme::Theme, bindings::Bindings) {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../themes")
         .join(name);
@@ -40,11 +39,29 @@ fn warm_frame(bencher: Bencher, name: &str) {
                 .unwrap(),
         );
     }
+    (renderer, theme, bindings)
+}
+
+#[divan::bench(args = ["default", "wob", "console", "minimal"])]
+fn warm_frame(bencher: Bencher, name: &str) {
+    let (mut renderer, theme, bindings) = setup(name);
     bencher.bench_local(|| {
         black_box(
             renderer
                 .render(&theme, &bindings, Some(Duration::from_millis(500)))
                 .unwrap(),
         )
+    });
+}
+
+#[divan::bench(args = ["default", "wob", "console", "minimal"])]
+fn warm_cached_frame(bencher: Bencher, name: &str) {
+    let (mut renderer, theme, bindings) = setup(name);
+    bencher.bench_local(|| {
+        black_box(
+            renderer
+                .render_cached(&theme, &bindings, Some(Duration::from_millis(500)))
+                .unwrap(),
+        );
     });
 }
