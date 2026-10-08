@@ -602,6 +602,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
+    let connections = ipc::ConnectionLimiter::new();
     for incoming in listener.incoming() {
         let stream = match incoming {
             Ok(s) => s,
@@ -610,10 +611,23 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 continue;
             }
         };
+        let Some(permit) = connections.try_acquire() else {
+            ipc::reject_connection(stream);
+            continue;
+        };
         let shared = Arc::clone(&shared);
-        thread::spawn(move || {
-            let _ = ipc::serve_connection(stream, move |req| shared.handle(req));
-        });
+        if let Err(error) = thread::Builder::new()
+            .name("awob-ipc".into())
+            .spawn(move || {
+                let _permit = permit;
+                if let Err(error) = ipc::serve_connection(stream, move |req| shared.handle(req)) {
+                    tracing::debug!("IPC connection closed: {error}");
+                }
+            })
+        {
+            // The failed spawn drops its closure, socket, and admission permit.
+            tracing::warn!("IPC thread spawn failed: {error}");
+        }
     }
 
     drop(server);
