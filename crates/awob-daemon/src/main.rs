@@ -167,7 +167,7 @@ impl Shared {
         Response::Ok
     }
 
-    fn query(&self, source: Option<String>) -> Response {
+    fn query(&mut self, source: Option<String>) -> Response {
         // One source may have multiple events; filter at iterate time.
         let mut entries = Vec::new();
         for (src, _evt, e) in self.history.entries() {
