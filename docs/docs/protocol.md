@@ -163,6 +163,25 @@ with different `event` values:
 
 Each gets its own history slot.
 
+History expires 30 minutes after the last update. Expired entries are excluded
+from queries and from `$lastValue`/`$lastMax`, including the first send after an
+idle period.
+
+The daemon retains at most 4,096 history entries and 4 MiB of identifier data
+(`source`, `event`, and `listener_id`, counted per entry). Indexes share these
+strings; shared identifiers are still charged once per entry. When either limit
+is reached, the least recently updated entries are evicted first. Entries with
+the same update time are evicted in lexical `(source, event)` order. Reading or
+querying an entry does not refresh it.
+
+An event whose identifiers exceed the entire 4 MiB budget is displayed but not
+remembered, and any previous history for that key is removed. Identifiers are
+never truncated. After expiry or eviction, the next event for that key has no
+previous value: `$lastValue` and `$lastMax` are `Null`, and value interpolation
+starts from the new value. History eviction also removes the entry's listener
+membership; another event from the same listener and source keeps that membership
+active.
+
 ## Building a listener
 
 Long-running event source. Pattern:

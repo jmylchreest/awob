@@ -370,11 +370,11 @@ fn persist_theme_to_config(path: &Path, theme: &str) -> std::io::Result<()> {
 fn history_entry(source: &str, e: &state::Entry) -> HistoryEntry {
     HistoryEntry {
         source: source.to_string(),
-        event: e.event.clone(),
+        event: e.event.to_string(),
         last_value: e.last_value,
         last_max: e.last_max,
         age_seconds: Instant::now().duration_since(e.last_seen).as_secs_f64(),
-        listener_id: e.listener_id.clone(),
+        listener_id: e.listener_id.as_ref().map(ToString::to_string),
     }
 }
 
