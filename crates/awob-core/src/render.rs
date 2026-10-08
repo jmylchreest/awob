@@ -62,6 +62,22 @@ impl Renderer {
         self.icons.set_theme_dir(dir);
     }
 
+    /// Discard cached raster resources after a theme reload, including when
+    /// the theme directory did not change. Ordinary sends should not call this.
+    ///
+    /// Font discovery and the font database are preserved. This only resets
+    /// renderer-owned icon/shadow caches and cosmic-text's glyph raster cache.
+    ///
+    /// ```
+    /// let mut renderer = awob_core::render::Renderer::new();
+    /// renderer.invalidate_caches();
+    /// ```
+    pub fn invalidate_caches(&mut self) {
+        self.icons.clear_cache();
+        self.shadows.clear();
+        self.text.clear_glyph_cache();
+    }
+
     /// Render the theme's scene against the given bindings into a pixmap.
     ///
     /// The pixmap is sized to the theme's surface dimensions and fully
@@ -393,6 +409,7 @@ impl Renderer {
             bb.y + spec.offset_y - pad,
             spec.colour,
         );
+        self.shadows.release_transient();
     }
 }
 
@@ -1000,5 +1017,25 @@ scene {
             &renderer.render_cached(&theme, &b, None).unwrap().data()[..4],
             &[255, 0, 0, 255]
         );
+    }
+
+    #[test]
+    fn both_render_apis_release_oversized_shadow_storage() {
+        let theme = parse(
+            r##"
+            surface { width 2; height 2 }
+            scene {
+                rect x=0 y=0 width=2100 height=2100 fill="#ff0000" shadow="0 0 0 #000000"
+            }
+        "##,
+        )
+        .unwrap();
+        let b = make_bindings(&theme);
+        let mut renderer = Renderer::new();
+        let expected = renderer.render(&theme, &b, None).unwrap();
+        assert!(!renderer.shadows.has_transient());
+        let actual = renderer.render_cached(&theme, &b, None).unwrap();
+        assert_eq!(actual.data(), expected.data());
+        assert!(!renderer.shadows.has_transient());
     }
 }
