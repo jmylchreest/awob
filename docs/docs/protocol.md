@@ -55,6 +55,19 @@ this automatically on `Client::connect()`.
 `HistoryEntry`: `source`, `event`, `last_value`, `last_max`,
 `age_seconds`, `listener_id`. One entry per `(source, event)` pair.
 
+The surface command queue holds up to 64 commands. When full, `Send`, `SetTheme`,
+`Reload`, and `SetForcePalette` return an `Error` with `surface busy: command queue
+is full; retry later`. A disconnected rendering thread returns `surface
+unavailable: rendering thread disconnected`. Queue-rejected requests do not update
+history, change the active theme or palette, or persist a theme choice. Clients
+may retry an explicit busy response after a short delay. Headless mode has no
+surface queue.
+
+Accepted surface commands retain their order. The existing single-slot pending
+OSD behavior described below still applies once commands reach the renderer.
+Automatic theme reload retries through its debounce window when the queue is
+full, keeping the previous theme active until the replacement is accepted.
+
 ## `SendPayload` reference
 
 This is the hot-path message. Field-by-field:
