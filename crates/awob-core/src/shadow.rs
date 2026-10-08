@@ -78,7 +78,13 @@ impl ShadowCache {
     /// A larger mask is held separately until [`Self::release_transient`] or
     /// the next request. This keeps the borrowed API without rejecting or
     /// changing geometry that was previously drawable.
-    pub fn get_or_compute(&mut self, w: u32, h: u32, radius: u32, blur: u32) -> (u32, u32, &[u8]) {
+    pub fn get_or_compute(
+        &mut self,
+        w: u32,
+        h: u32,
+        radius: u32,
+        blur: u32,
+    ) -> Result<(u32, u32, &[u8]), crate::limits::RasterLimit> {
         self.release_transient();
         let blur = blur.min(MAX_BLUR_RADIUS as u32);
         let key = (w, h, radius, blur);
@@ -89,11 +95,11 @@ impl ShadowCache {
                 .expect("index came from this cache");
             self.masks.push_back(hit);
         } else {
-            let mask = compute_mask(w, h, radius, blur);
+            let mask = compute_mask(w, h, radius, blur)?;
             let bytes = mask_bytes(&mask);
             if bytes > CACHE_BYTES {
                 let entry = self.transient.insert(mask);
-                return (entry.0, entry.1, &entry.2);
+                return Ok((entry.0, entry.1, &entry.2));
             }
             while self.bytes + bytes > CACHE_BYTES || self.masks.len() >= CACHE_ENTRIES {
                 if let Some((_, old)) = self.masks.pop_front() {
@@ -104,7 +110,7 @@ impl ShadowCache {
             self.masks.push_back((key, mask));
         }
         let entry = &self.masks.back().expect("mask was inserted or promoted").1;
-        (entry.0, entry.1, &entry.2)
+        Ok((entry.0, entry.1, &entry.2))
     }
 
     /// Drop an oversized mask after its last use in the current draw.
@@ -130,20 +136,26 @@ fn mask_bytes(mask: &MaskEntry) -> usize {
 /// the visual extent of a Gaussian — beyond that, the kernel weight is
 /// effectively zero. We use that as the safe envelope.
 pub fn shadow_padding(blur: u32) -> u32 {
-    (blur * 2).max(1)
+    (blur.min(MAX_BLUR_RADIUS as u32) * 2).max(1)
 }
 
-fn compute_mask(w: u32, h: u32, radius: u32, blur: u32) -> (u32, u32, Vec<u8>) {
-    let pad = shadow_padding(blur);
-    let mw = w + 2 * pad;
-    let mh = h + 2 * pad;
-    let mut buf = vec![0u8; (mw as usize) * (mh as usize)];
+fn compute_mask(
+    w: u32,
+    h: u32,
+    radius: u32,
+    blur: u32,
+) -> Result<(u32, u32, Vec<u8>), crate::limits::RasterLimit> {
+    let pad = shadow_padding(blur.min(MAX_BLUR_RADIUS as u32));
+    let mw = w.checked_add(2 * pad).ok_or(crate::limits::RasterLimit)?;
+    let mh = h.checked_add(2 * pad).ok_or(crate::limits::RasterLimit)?;
+    let pixels = crate::limits::pixels(mw, mh)?;
+    let mut buf = vec![0u8; pixels];
     rasterise_rounded_rect_alpha(&mut buf, mw, mh, pad, w, h, radius);
     if blur > 0 {
         let sigma = (blur as f32 / 2.0).max(0.5);
         blur_alpha(&mut buf, mw as usize, mh as usize, sigma);
     }
-    (mw, mh, buf)
+    Ok((mw, mh, buf))
 }
 
 fn rasterise_rounded_rect_alpha(
@@ -277,8 +289,8 @@ mod tests {
     #[test]
     fn cache_returns_same_dimensions_on_hit() {
         let mut cache = ShadowCache::new();
-        let (mw1, mh1, _) = cache.get_or_compute(50, 30, 8, 16);
-        let (mw2, mh2, _) = cache.get_or_compute(50, 30, 8, 16);
+        let (mw1, mh1, _) = cache.get_or_compute(50, 30, 8, 16).unwrap();
+        let (mw2, mh2, _) = cache.get_or_compute(50, 30, 8, 16).unwrap();
         assert_eq!(mw1, mw2);
         assert_eq!(mh1, mh2);
         assert_eq!(mw1, 50 + 2 * shadow_padding(16));
@@ -305,7 +317,7 @@ mod tests {
     #[test]
     fn mask_has_full_alpha_at_centre_when_unblurred() {
         let mut cache = ShadowCache::new();
-        let (mw, _, mask) = cache.get_or_compute(40, 40, 0, 0);
+        let (mw, _, mask) = cache.get_or_compute(40, 40, 0, 0).unwrap();
         let pad = shadow_padding(0);
         let cx = (pad + 20) as usize;
         let cy = (pad + 20) as usize;
@@ -316,14 +328,16 @@ mod tests {
     fn cache_budget_bounds_geometry_churn_and_promotes_hits() {
         let mut cache = ShadowCache::new();
         for width in 300..500 {
-            cache.get_or_compute(width, 64, 12, 24);
+            cache.get_or_compute(width, 64, 12, 24).unwrap();
             assert!(cache.bytes <= CACHE_BYTES);
             assert!(cache.masks.len() <= CACHE_ENTRIES);
         }
         assert!(cache.masks.len() < 200);
         let newest = cache.masks.back().unwrap().0;
         let oldest = cache.masks.front().unwrap().0;
-        cache.get_or_compute(oldest.0, oldest.1, oldest.2, oldest.3);
+        cache
+            .get_or_compute(oldest.0, oldest.1, oldest.2, oldest.3)
+            .unwrap();
         assert_eq!(cache.masks.back().unwrap().0, oldest);
         assert_ne!(oldest, newest);
     }
@@ -331,8 +345,8 @@ mod tests {
     #[test]
     fn oversized_shadow_is_transient_and_pixels_are_unchanged() {
         let mut cache = ShadowCache::new();
-        let expected = compute_mask(2100, 2100, 0, 0);
-        let (_, _, actual) = cache.get_or_compute(2100, 2100, 0, 0);
+        let expected = compute_mask(2100, 2100, 0, 0).unwrap();
+        let (_, _, actual) = cache.get_or_compute(2100, 2100, 0, 0).unwrap();
         assert_eq!(actual, expected.2);
         assert!(cache.masks.is_empty());
         assert!(cache.transient.is_some());
@@ -344,16 +358,30 @@ mod tests {
     #[test]
     fn shadow_lru_evicts_cold_entry_and_recomputes_identical_pixels() {
         let mut cache = ShadowCache::new();
-        let expected = cache.get_or_compute(2, 2, 0, 0).2.to_vec();
+        let expected = cache.get_or_compute(2, 2, 0, 0).unwrap().2.to_vec();
         for width in 3..=CACHE_ENTRIES as u32 + 1 {
-            cache.get_or_compute(width, 2, 0, 0);
+            cache.get_or_compute(width, 2, 0, 0).unwrap();
         }
-        cache.get_or_compute(2, 2, 0, 0);
-        cache.get_or_compute(100, 2, 0, 0);
+        cache.get_or_compute(2, 2, 0, 0).unwrap();
+        cache.get_or_compute(100, 2, 0, 0).unwrap();
         assert!(cache.masks.iter().any(|(key, _)| key.0 == 2));
         assert!(!cache.masks.iter().any(|(key, _)| key.0 == 3));
         cache.clear();
         assert_eq!(cache.bytes, 0);
-        assert_eq!(cache.get_or_compute(2, 2, 0, 0).2, expected);
+        assert_eq!(cache.get_or_compute(2, 2, 0, 0).unwrap().2, expected);
+    }
+    #[test]
+    fn security_shadow_limits_include_padding_and_overflow() {
+        let mut cache = ShadowCache::new();
+        for (w, h, blur) in [
+            (u32::MAX, 1, 1),
+            (8192, 1, 0),
+            (4096, 4096, 0),
+            (8190, 1024, 1),
+        ] {
+            assert!(cache.get_or_compute(w, h, 0, blur).is_err());
+        }
+        assert!(cache.masks.is_empty());
+        assert!(cache.transient.is_none());
     }
 }

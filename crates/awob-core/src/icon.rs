@@ -107,7 +107,7 @@ impl IconResolver {
     /// `-symbolic` suffix). The caller uses this to apply theme-foreground
     /// tinting automatically.
     pub fn resolve_with_meta(&mut self, src: &str, w: u32, h: u32) -> Option<(Pixmap, bool)> {
-        if src.is_empty() {
+        if src.is_empty() || crate::limits::pixels(w, h).is_err() {
             return None;
         }
         if let Some(index) = self
@@ -288,6 +288,7 @@ fn is_symbolic_path(p: &Path) -> bool {
 }
 
 fn rasterise_svg(bytes: &[u8], w: u32, h: u32) -> Result<Pixmap, IconError> {
+    crate::limits::pixels(w, h).map_err(|_| IconError::TooLarge)?;
     let opt = usvg::Options::default();
     let tree = usvg::Tree::from_data(bytes, &opt).map_err(|e| IconError::Svg(e.to_string()))?;
     let mut pm = Pixmap::new(w, h).ok_or_else(|| IconError::Svg("pixmap alloc".into()))?;
@@ -304,11 +305,23 @@ fn rasterise_svg(bytes: &[u8], w: u32, h: u32) -> Result<Pixmap, IconError> {
 }
 
 fn rasterise_png<R: std::io::Read>(reader: R, w: u32, h: u32) -> Result<Pixmap, IconError> {
-    let decoder = png::Decoder::new(reader);
+    crate::limits::pixels(w, h).map_err(|_| IconError::TooLarge)?;
+    let decoder = png::Decoder::new_with_limits(
+        reader,
+        png::Limits {
+            bytes: crate::limits::PNG_SCRATCH_BYTES,
+        },
+    );
     let mut reader = decoder
         .read_info()
         .map_err(|e| IconError::Png(e.to_string()))?;
-    let mut buf = vec![0; reader.output_buffer_size()];
+    crate::limits::pixels(reader.info().width, reader.info().height)
+        .map_err(|_| IconError::TooLarge)?;
+    let output_bytes = reader.output_buffer_size();
+    if output_bytes > crate::limits::MAX_RGBA_BYTES {
+        return Err(IconError::TooLarge);
+    }
+    let mut buf = vec![0; output_bytes];
     let info = reader
         .next_frame(&mut buf)
         .map_err(|e| IconError::Png(e.to_string()))?;
@@ -524,5 +537,44 @@ mod tests {
         assert_eq!(&pm.data()[..4], &[255, 0, 0, 255]);
         assert!(resolver.cache.is_empty());
         assert_eq!(resolver.bytes, 0);
+    }
+    #[test]
+    fn security_png_limits_reject_headers_before_decoding_pixels() {
+        // Real PNG headers followed by IDAT, without pixel data. TooLarge
+        // proves rejection happens before next_frame or output allocation.
+        let headers: &[&[u8]] = &[
+            &[
+                137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 32, 0, 0, 0,
+                32, 0, 8, 6, 0, 0, 0, 114, 170, 202, 89, 0, 0, 0, 0, 73, 68, 65, 84,
+            ],
+            &[
+                137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 32, 1, 0, 0, 0,
+                1, 8, 6, 0, 0, 0, 153, 137, 75, 94, 0, 0, 0, 0, 73, 68, 65, 84,
+            ],
+            &[
+                137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 32, 0, 0, 0, 4,
+                0, 16, 6, 0, 0, 0, 25, 200, 11, 149, 0, 0, 0, 0, 73, 68, 65, 84,
+            ],
+        ];
+        for header in headers {
+            assert!(matches!(
+                rasterise_png(std::io::Cursor::new(header), 8, 8),
+                Err(IconError::TooLarge)
+            ));
+        }
+    }
+
+    #[test]
+    fn security_icon_target_bounds_precede_asset_io() {
+        let mut resolver = IconResolver::new();
+        assert!(
+            resolver
+                .resolve("/path/that/must/not/be/opened.svg", 8193, 1)
+                .is_none()
+        );
+        assert!(matches!(
+            rasterise_svg(EMBEDDED_FALLBACK_SVG, 4096, 4096),
+            Err(IconError::TooLarge)
+        ));
     }
 }

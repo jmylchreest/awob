@@ -21,6 +21,11 @@ use crate::colour::Colour;
 const GLYPH_CACHE_BYTES: usize = 4 * 1024 * 1024;
 const GLYPH_CACHE_ENTRIES: usize = 4096;
 
+/// Invalid input was rejected before text shaping or glyph rasterization.
+#[derive(Debug, thiserror::Error)]
+#[error("text exceeds limits (label <= 16 KiB, finite font size > 0 and <= 512 px)")]
+pub struct TextError;
+
 pub struct TextRenderer {
     pub font_system: FontSystem,
     pub swash_cache: SwashCache,
@@ -70,9 +75,11 @@ impl TextRenderer {
     }
 
     /// Returns (width_px, height_px) for the text laid out with the given font.
-    pub fn measure(&mut self, text: &str, font_spec: &FontSpec) -> (f32, f32) {
-        let buffer = self.shape(text, font_spec);
-        Self::measure_shaped(&buffer)
+    ///
+    /// Returns [`TextError`] before shaping if the label or font exceeds the input limits.
+    pub fn measure(&mut self, text: &str, font_spec: &FontSpec) -> Result<(f32, f32), TextError> {
+        let buffer = self.shape(text, font_spec)?;
+        Ok(Self::measure_shaped(&buffer))
     }
 
     pub(crate) fn measure_shaped(buffer: &Buffer) -> (f32, f32) {
@@ -87,6 +94,8 @@ impl TextRenderer {
 
     /// Render `text` with `colour` into `pm`, with the text's top-left corner
     /// at (`x`, `y`). Pixels outside `pm` are clipped.
+    ///
+    /// Returns [`TextError`] before shaping if the label or font exceeds the input limits.
     pub fn draw(
         &mut self,
         pm: &mut Pixmap,
@@ -95,9 +104,10 @@ impl TextRenderer {
         text: &str,
         font_spec: &FontSpec,
         colour: Colour,
-    ) {
-        let mut buffer = self.shape(text, font_spec);
+    ) -> Result<(), TextError> {
+        let mut buffer = self.shape(text, font_spec)?;
         self.draw_shaped(pm, x, y, &mut buffer, colour);
+        Ok(())
     }
 
     pub(crate) fn draw_shaped(
@@ -161,7 +171,11 @@ impl TextRenderer {
         self.trim_glyph_cache();
     }
 
-    pub(crate) fn shape(&mut self, text: &str, spec: &FontSpec) -> Buffer {
+    pub(crate) fn shape(&mut self, text: &str, spec: &FontSpec) -> Result<Buffer, TextError> {
+        if text.len() > 16 * 1024 || !spec.size.is_finite() || spec.size <= 0.0 || spec.size > 512.0
+        {
+            return Err(TextError);
+        }
         let metrics = Metrics::new(spec.size, spec.size * 1.25);
         let mut buffer = Buffer::new(&mut self.font_system, metrics);
         // CSS generic family names map to cosmic-text's generic enum
@@ -189,7 +203,7 @@ impl TextRenderer {
         buffer.set_size(Some(10_000.0), Some(spec.size * 4.0));
         buffer.set_text(text, &attrs, Shaping::Advanced, None);
         buffer.shape_until_scroll(&mut self.font_system, false);
-        buffer
+        Ok(buffer)
     }
 }
 
@@ -340,17 +354,19 @@ mod tests {
         for label in ["Volume 75%", "mute", "مرحبا", "A\nsecond line", ""] {
             for font in ["sans-serif 14", "monospace 17 bold", "serif 12 italic"] {
                 let spec = FontSpec::parse(font);
-                let expected_size = renderer.measure(label, &spec);
+                let expected_size = renderer.measure(label, &spec).unwrap();
                 let mut expected = Pixmap::new(180, 50).unwrap();
-                renderer.draw(
-                    &mut expected,
-                    -2.0,
-                    3.0,
-                    label,
-                    &spec,
-                    Colour::rgb(83, 149, 231),
-                );
-                let mut buffer = renderer.shape(label, &spec);
+                renderer
+                    .draw(
+                        &mut expected,
+                        -2.0,
+                        3.0,
+                        label,
+                        &spec,
+                        Colour::rgb(83, 149, 231),
+                    )
+                    .unwrap();
+                let mut buffer = renderer.shape(label, &spec).unwrap();
                 assert_eq!(TextRenderer::measure_shaped(&buffer), expected_size);
                 let mut actual = Pixmap::new(180, 50).unwrap();
                 renderer.draw_shaped(
@@ -415,27 +431,56 @@ mod tests {
         let mut renderer = TextRenderer::new();
         let spec = FontSpec::parse("sans-serif 14");
         let mut expected = Pixmap::new(180, 50).unwrap();
-        renderer.draw(
-            &mut expected,
-            0.0,
-            0.0,
-            "Volume 75%",
-            &spec,
-            Colour::rgb(255, 255, 255),
-        );
+        renderer
+            .draw(
+                &mut expected,
+                0.0,
+                0.0,
+                "Volume 75%",
+                &spec,
+                Colour::rgb(255, 255, 255),
+            )
+            .unwrap();
         let font_count = renderer.font_system.db().faces().count();
         renderer.clear_glyph_cache();
         assert!(renderer.swash_cache.image_cache.is_empty());
         assert_eq!(renderer.font_system.db().faces().count(), font_count);
         let mut actual = Pixmap::new(180, 50).unwrap();
-        renderer.draw(
-            &mut actual,
-            0.0,
-            0.0,
-            "Volume 75%",
-            &spec,
-            Colour::rgb(255, 255, 255),
-        );
+        renderer
+            .draw(
+                &mut actual,
+                0.0,
+                0.0,
+                "Volume 75%",
+                &spec,
+                Colour::rgb(255, 255, 255),
+            )
+            .unwrap();
         assert_eq!(actual.data(), expected.data());
+    }
+    #[test]
+    fn security_text_limits_reject_before_shaping() {
+        let mut renderer = TextRenderer::new();
+        let mut spec = FontSpec::default();
+        for size in [0.0, -1.0, 513.0, f32::NAN, f32::INFINITY] {
+            spec.size = size;
+            assert!(renderer.measure("x", &spec).is_err());
+        }
+        spec.size = 14.0;
+        let mut pm = Pixmap::new(1, 1).unwrap();
+        assert!(
+            renderer
+                .draw(
+                    &mut pm,
+                    0.0,
+                    0.0,
+                    &"x".repeat(16 * 1024 + 1),
+                    &spec,
+                    Colour::rgb(255, 255, 255)
+                )
+                .is_err()
+        );
+        assert!(renderer.swash_cache.image_cache.is_empty());
+        assert!(renderer.measure("x", &spec).is_ok());
     }
 }

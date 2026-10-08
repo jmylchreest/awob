@@ -418,3 +418,23 @@ scene {
 
 A 240×6 ribbon at the bottom of the screen. No icon, no label, just
 the bar value. Useful if you want a wob-shaped slice of an OSD.
+
+
+## Resource limits
+
+Raster surfaces, PNG sources and icon targets accept axes from 1 to 8,192 pixels
+and at most 8,388,608 pixels. PNG decoded output is additionally limited to
+32 MiB, with an 8 MiB decoder scratch budget. Shadow masks use the same axis and
+pixel limits after blur padding; a mask uses at most 8 MiB plus a same-sized blur
+scratch buffer. These limits apply before allocation and are separate from cache
+budgets. They do not impose a total process memory limit.
+
+Surface dimensions must be positive integers. Invalid dimensions reject the theme;
+a failed reload leaves the previous theme active. Rejected icons use the usual
+placeholder. Dynamic shadow geometry over the budget fails that render rather
+than changing its shape.
+
+Each rendered text label is limited to 16 KiB of UTF-8 and a finite font size greater
+than zero and no more than 512 pixels. Exceeding either limit fails the render;
+labels are not silently truncated. Applications using the core text API must handle
+errors from `TextRenderer::measure` and `TextRenderer::draw`.
