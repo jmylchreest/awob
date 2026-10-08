@@ -8,12 +8,14 @@
 //! daemon and every listener share one log format and the same `RUST_LOG`
 //! semantics.
 
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 pub mod listener;
+mod transport;
+use transport::{DeadlineWriter, MAX_RESPONSE_BYTES, REQUEST_TIMEOUT, read_response_line};
 
 pub use awob_protocol::{HistoryEntry, PROTOCOL_VERSION, Request, Response, SendPayload};
 
@@ -48,6 +50,9 @@ pub enum Error {
     UnexpectedResponse(Response),
     #[error("daemon closed the connection without responding")]
     Disconnected,
+    /// A response line exceeded the SDK's bounded transport buffer.
+    #[error("daemon response exceeds {limit}-byte limit")]
+    ResponseTooLarge { limit: usize },
     #[error("protocol version mismatch: client={client} daemon={daemon}")]
     VersionMismatch { client: u32, daemon: u32 },
 }
@@ -101,24 +106,43 @@ impl Client {
     }
 
     fn request_line(&mut self, line: &[u8]) -> std::result::Result<Response, RequestFailure> {
-        write_request(&mut self.stream, line)?;
-        // From here on the daemon may already have processed the event. Neither
-        // timeouts nor a lost acknowledgement make it safe to replay the request.
-        let response = (|| {
-            let mut buf = String::new();
-            if self.reader.read_line(&mut buf)? == 0 {
-                return Err(Error::Disconnected);
-            }
-            let resp: Response = serde_json::from_str(buf.trim_end())?;
-            match resp {
-                Response::Error { message } => Err(Error::Daemon(message)),
-                other => Ok(other),
-            }
+        self.request_line_with_limits(line, Instant::now() + REQUEST_TIMEOUT, MAX_RESPONSE_BYTES)
+    }
+
+    fn request_line_with_limits(
+        &mut self,
+        line: &[u8],
+        deadline: Instant,
+        limit: usize,
+    ) -> std::result::Result<Response, RequestFailure> {
+        let result = (|| {
+            write_request(&mut DeadlineWriter::new(&mut self.stream, deadline), line)?;
+            // Any response failure is ambiguous: the request may already have run.
+            let response = (|| {
+                let bytes = read_response_line(&mut self.reader, deadline, limit)?;
+                if bytes.is_empty() {
+                    return Err(Error::Disconnected);
+                }
+                let text = std::str::from_utf8(&bytes)
+                    .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+                match serde_json::from_str::<Response>(text.trim_end())? {
+                    Response::Error { message } => Err(Error::Daemon(message)),
+                    response => Ok(response),
+                }
+            })();
+            response.map_err(|error| RequestFailure {
+                error,
+                retry_safe: false,
+            })
         })();
-        response.map_err(|error| RequestFailure {
-            error,
-            retry_safe: false,
-        })
+        if result
+            .as_ref()
+            .is_err_and(|failure| !matches!(failure.error, Error::Daemon(_)))
+        {
+            // A partial or malformed response cannot be resynchronized safely.
+            let _ = self.stream.shutdown(std::net::Shutdown::Both);
+        }
+        result
     }
 
     /// Negotiate protocol version. Returns daemon version string on success.
@@ -248,6 +272,7 @@ impl ReconnectingClient {
     /// ```
     pub fn send(&mut self, payload: SendPayload) -> Result<()> {
         let line = Client::encode_request(&Request::Send(payload))?;
+        let deadline = Instant::now() + REQUEST_TIMEOUT;
         if self.client.is_none() {
             self.client = Some(Client::connect_or_default(self.socket.as_deref())?);
         }
@@ -255,12 +280,12 @@ impl ReconnectingClient {
             .client
             .as_mut()
             .expect("connection initialized")
-            .request_line(&line);
+            .request_line_with_limits(&line, deadline, MAX_RESPONSE_BYTES);
         let result = match result {
             Err(failure) if failure.retry_safe => {
                 self.client = None;
                 let mut client = Client::connect_or_default(self.socket.as_deref())?;
-                let result = client.request_line(&line);
+                let result = client.request_line_with_limits(&line, deadline, MAX_RESPONSE_BYTES);
                 self.client = Some(client);
                 result
             }
@@ -571,5 +596,129 @@ mod tests {
             let failure = write_request(&mut writer, b"request\n").unwrap_err();
             assert_eq!(failure.retry_safe, retry_safe);
         }
+    }
+    fn client_pair() -> (Client, UnixStream) {
+        let (stream, server) = UnixStream::pair().unwrap();
+        let reader = BufReader::new(stream.try_clone().unwrap());
+        (Client { stream, reader }, server)
+    }
+
+    #[test]
+    fn oversized_response_closes_transport_without_allowing_replay() {
+        let (mut client, mut server) = client_pair();
+        let worker = thread::spawn(move || {
+            let mut request = String::new();
+            BufReader::new(server.try_clone().unwrap())
+                .read_line(&mut request)
+                .unwrap();
+            let _ = server.write_all(&vec![b'x'; 2048]);
+        });
+        let failure = client
+            .request_line_with_limits(
+                b"{\"type\":\"version\"}\n",
+                Instant::now() + Duration::from_secs(1),
+                1024,
+            )
+            .err()
+            .unwrap();
+        assert!(matches!(
+            failure.error,
+            Error::ResponseTooLarge { limit: 1024 }
+        ));
+        assert!(!failure.retry_safe);
+        assert!(client.stream.write_all(b"another request").is_err());
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn dripping_response_cannot_extend_total_deadline() {
+        let (mut client, mut server) = client_pair();
+        let worker = thread::spawn(move || {
+            let mut request = String::new();
+            BufReader::new(server.try_clone().unwrap())
+                .read_line(&mut request)
+                .unwrap();
+            for _ in 0..30 {
+                if server.write_all(b" ").is_err() {
+                    break;
+                }
+                thread::sleep(Duration::from_millis(10));
+            }
+        });
+        let failure = client
+            .request_line_with_limits(
+                b"{\"type\":\"version\"}\n",
+                Instant::now() + Duration::from_millis(50),
+                MAX_RESPONSE_BYTES,
+            )
+            .err()
+            .unwrap();
+        assert!(
+            matches!(failure.error, Error::Io(ref error) if error.kind() == std::io::ErrorKind::TimedOut)
+        );
+        assert!(!failure.retry_safe);
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn response_larger_than_request_limit_is_accepted() {
+        let (mut client, mut server) = client_pair();
+        let version = "v".repeat(128 * 1024);
+        let expected = version.clone();
+        let worker = thread::spawn(move || {
+            let mut request = String::new();
+            BufReader::new(server.try_clone().unwrap())
+                .read_line(&mut request)
+                .unwrap();
+            let mut response = serde_json::to_vec(&Response::Version {
+                daemon_version: version,
+                protocol: PROTOCOL_VERSION,
+            })
+            .unwrap();
+            response.push(b'\n');
+            server.write_all(&response).unwrap();
+        });
+        assert_eq!(client.version().unwrap().0, expected);
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn partial_request_write_timeout_is_not_replayable() {
+        let (mut client, _server) = client_pair();
+        let line = vec![b'x'; 8 * 1024 * 1024];
+        let failure = client
+            .request_line_with_limits(
+                &line,
+                Instant::now() + Duration::from_millis(50),
+                MAX_RESPONSE_BYTES,
+            )
+            .err()
+            .unwrap();
+        assert!(
+            matches!(failure.error, Error::Io(ref error) if error.kind() == std::io::ErrorKind::TimedOut)
+        );
+        assert!(!failure.retry_safe);
+    }
+
+    #[test]
+    fn response_limit_includes_the_newline_and_accepts_exact_boundary() {
+        let (mut client, mut server) = client_pair();
+        let response = b"{\"type\":\"ok\"}\n";
+        let worker = thread::spawn(move || {
+            let mut request = String::new();
+            BufReader::new(server.try_clone().unwrap())
+                .read_line(&mut request)
+                .unwrap();
+            server.write_all(response).unwrap();
+        });
+        assert!(matches!(
+            client.request_line_with_limits(
+                b"request\n",
+                Instant::now() + Duration::from_secs(1),
+                response.len()
+            ),
+            Ok(Response::Ok)
+        ));
+        worker.join().unwrap();
     }
 }
