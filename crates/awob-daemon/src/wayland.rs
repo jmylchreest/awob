@@ -9,7 +9,7 @@
 mod pacing;
 use pacing::{ELEMENT_INTERVAL, Pacing};
 
-use std::sync::mpsc::{Receiver, Sender, channel};
+use std::sync::{Arc, mpsc::TrySendError};
 use std::time::{Duration, Instant};
 
 use awob_core::bindings::{Bindings, Value};
@@ -18,7 +18,7 @@ use awob_core::scene::{Anchor as ThemeAnchor, Edge};
 use awob_core::theme::Theme;
 use awob_core::{Margin, Surface as ThemeSurface};
 use calloop::EventLoop;
-use calloop::channel::Event as CalloopEvent;
+use calloop::channel::{Channel, Event as CalloopEvent, SyncSender, sync_channel};
 use calloop_wayland_source::WaylandSource;
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState, FrameCallbackData},
@@ -49,7 +49,7 @@ pub enum SurfaceCommand {
     /// `last_value` to the value carried by `bindings` over
     /// `transition_duration`, re-rendering each frame.
     Render {
-        theme: Theme,
+        theme: Arc<Theme>,
         bindings: Bindings,
         last_value: f64,
         transition_duration: Duration,
@@ -59,11 +59,12 @@ pub enum SurfaceCommand {
         source: Option<String>,
         event: String,
         preempt: bool,
+        show_override: Option<Duration>,
     },
     /// Replace the active theme on a visible OSD without restarting the
     /// cycle. No-op when idle.
     Retheme {
-        theme: Theme,
+        theme: Arc<Theme>,
         theme_dir: Option<std::path::PathBuf>,
     },
     /// Reserved for graceful shutdown; not yet wired.
@@ -72,14 +73,35 @@ pub enum SurfaceCommand {
 }
 
 pub struct SurfaceHandle {
-    tx: Sender<SurfaceCommand>,
+    tx: SyncSender<SurfaceCommand>,
+}
+
+/// Bounded admission never waits while the daemon's shared state is locked.
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum SurfaceSendError {
+    #[error("surface busy: command queue is full; retry later")]
+    Busy,
+    #[error("surface unavailable: rendering thread disconnected")]
+    Disconnected,
 }
 
 impl SurfaceHandle {
+    pub fn channel() -> (Self, Channel<SurfaceCommand>) {
+        let (tx, rx) = sync_channel(64);
+        (Self { tx }, rx)
+    }
+
+    fn enqueue(&self, command: SurfaceCommand) -> Result<(), SurfaceSendError> {
+        self.tx.try_send(command).map_err(|error| match error {
+            TrySendError::Full(_) => SurfaceSendError::Busy,
+            TrySendError::Disconnected(_) => SurfaceSendError::Disconnected,
+        })
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn render(
         &self,
-        theme: Theme,
+        theme: Arc<Theme>,
         bindings: Bindings,
         last_value: f64,
         transition_duration: Duration,
@@ -87,8 +109,9 @@ impl SurfaceHandle {
         source: Option<String>,
         event: String,
         preempt: bool,
-    ) {
-        let _ = self.tx.send(SurfaceCommand::Render {
+        show_override: Option<Duration>,
+    ) -> Result<(), SurfaceSendError> {
+        self.enqueue(SurfaceCommand::Render {
             theme,
             bindings,
             last_value,
@@ -97,14 +120,19 @@ impl SurfaceHandle {
             source,
             event,
             preempt,
-        });
+            show_override,
+        })
     }
-    pub fn retheme(&self, theme: Theme, theme_dir: Option<std::path::PathBuf>) {
-        let _ = self.tx.send(SurfaceCommand::Retheme { theme, theme_dir });
+    pub fn retheme(
+        &self,
+        theme: Arc<Theme>,
+        theme_dir: Option<std::path::PathBuf>,
+    ) -> Result<(), SurfaceSendError> {
+        self.enqueue(SurfaceCommand::Retheme { theme, theme_dir })
     }
     #[allow(dead_code)]
-    pub fn stop(&self) {
-        let _ = self.tx.send(SurfaceCommand::Stop);
+    pub fn stop(&self) -> Result<(), SurfaceSendError> {
+        self.enqueue(SurfaceCommand::Stop)
     }
 }
 
@@ -139,15 +167,15 @@ pub fn spawn() -> Result<
     ),
     WaylandError,
 > {
-    let (tx, rx) = channel::<SurfaceCommand>();
+    let (handle, rx) = SurfaceHandle::channel();
     let join = std::thread::Builder::new()
         .name("awob-wayland".into())
         .spawn(move || run(rx))
         .map_err(|e| WaylandError::Calloop(format!("thread spawn: {e}")))?;
-    Ok((SurfaceHandle { tx }, join))
+    Ok((handle, join))
 }
 
-fn run(cmd_rx: Receiver<SurfaceCommand>) -> Result<(), WaylandError> {
+fn run(loop_rx: Channel<SurfaceCommand>) -> Result<(), WaylandError> {
     let conn = Connection::connect_to_env()?;
     let (globals, event_queue) = registry_queue_init::<State>(&conn)?;
     let qh = event_queue.handle();
@@ -158,19 +186,6 @@ fn run(cmd_rx: Receiver<SurfaceCommand>) -> Result<(), WaylandError> {
         .map_err(|e| WaylandError::Calloop(format!("compositor: {e}")))?;
     let shm = Shm::bind(&globals, &qh).map_err(|e| WaylandError::Calloop(format!("shm: {e}")))?;
     let layer_shell = LayerShell::bind(&globals, &qh).map_err(|_| WaylandError::NoLayerShell)?;
-
-    // Forward channel commands into the calloop event loop.
-    let (loop_tx, loop_rx) = calloop::channel::channel::<SurfaceCommand>();
-    let bridge = std::thread::Builder::new()
-        .name("awob-wayland-bridge".into())
-        .spawn(move || {
-            while let Ok(c) = cmd_rx.recv() {
-                if loop_tx.send(c).is_err() {
-                    break;
-                }
-            }
-        })
-        .map_err(|e| WaylandError::Calloop(format!("bridge spawn: {e}")))?;
 
     let mut event_loop: EventLoop<'_, State> =
         EventLoop::try_new().map_err(|e| WaylandError::Calloop(e.to_string()))?;
@@ -222,6 +237,7 @@ fn run(cmd_rx: Receiver<SurfaceCommand>) -> Result<(), WaylandError> {
                         source,
                         event,
                         preempt,
+                        show_override,
                     } => {
                         state.handle_send(
                             theme,
@@ -232,6 +248,7 @@ fn run(cmd_rx: Receiver<SurfaceCommand>) -> Result<(), WaylandError> {
                             source,
                             event,
                             preempt,
+                            show_override,
                         );
                     }
                     SurfaceCommand::Retheme { theme, theme_dir } => {
@@ -251,7 +268,6 @@ fn run(cmd_rx: Receiver<SurfaceCommand>) -> Result<(), WaylandError> {
         state.tick();
     }
 
-    drop(bridge);
     Ok(())
 }
 
@@ -269,7 +285,7 @@ struct State {
     configured: bool,
     /// Re-rendered every animation frame from `theme` + interpolated
     /// `bindings`. `None` while idle.
-    theme: Option<Theme>,
+    theme: Option<Arc<Theme>>,
     bindings: Option<Bindings>,
     last_value: f64,
     target_value: f64,
@@ -290,13 +306,14 @@ struct State {
 }
 
 struct PendingRender {
-    theme: Theme,
+    theme: Arc<Theme>,
     bindings: Bindings,
     last_value: f64,
     transition_duration: Duration,
     theme_dir: Option<std::path::PathBuf>,
     source: Option<String>,
     event: String,
+    show_override: Option<Duration>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -311,7 +328,7 @@ impl State {
     #[allow(clippy::too_many_arguments)]
     fn handle_send(
         &mut self,
-        theme: Theme,
+        theme: Arc<Theme>,
         bindings: Bindings,
         last_value: f64,
         transition_duration: Duration,
@@ -319,6 +336,7 @@ impl State {
         source: Option<String>,
         event: String,
         preempt: bool,
+        show_override: Option<Duration>,
     ) {
         let phase = self.current_phase();
         let active = !matches!(phase, Phase::Done);
@@ -341,6 +359,7 @@ impl State {
                 source,
                 event,
                 same_pair,
+                show_override,
             );
         } else {
             // Different `(source, event)` and the sender asked to wait.
@@ -353,6 +372,7 @@ impl State {
                 theme_dir,
                 source,
                 event,
+                show_override,
             });
         }
     }
@@ -360,7 +380,7 @@ impl State {
     #[allow(clippy::too_many_arguments)]
     fn queue_render(
         &mut self,
-        theme: Theme,
+        theme: Arc<Theme>,
         bindings: Bindings,
         last_value: f64,
         transition_duration: Duration,
@@ -368,8 +388,9 @@ impl State {
         source: Option<String>,
         event: String,
         is_continuity: bool,
+        show_override: Option<Duration>,
     ) {
-        let surface = theme.surface.clone();
+        let surface = surface_for_send(&theme, show_override);
         if self.layer.is_none() {
             self.create_layer(&surface);
         } else {
@@ -385,6 +406,11 @@ impl State {
 
         self.surface_def = surface;
         self.theme = Some(theme);
+        let mut bindings = bindings;
+        bindings
+            .vars
+            .entry("transitionProgress".into())
+            .or_insert(Value::Number(0.0));
         self.bindings = Some(bindings);
         self.target_value = target_value;
         self.transition_duration = transition_duration;
@@ -426,7 +452,7 @@ impl State {
     /// Palette-keyed colours (`fill="$bg"`) refresh on the next frame;
     /// style-resolved colours (e.g. `$accent` from `apply_style`) only
     /// refresh on the next send.
-    fn retheme(&mut self, theme: Theme, theme_dir: Option<std::path::PathBuf>) {
+    fn retheme(&mut self, theme: Arc<Theme>, theme_dir: Option<std::path::PathBuf>) {
         self.renderer.invalidate_caches();
         self.renderer.set_theme_dir(theme_dir);
         if self.theme.is_none() || self.bindings.is_none() {
@@ -572,10 +598,6 @@ impl State {
         let eased = 1.0 - (1.0 - transition_progress).powi(3);
         let interp_value = self.last_value + (self.target_value - self.last_value) * eased;
 
-        let mut frame_bindings = self.bindings.as_ref().unwrap().clone();
-        frame_bindings.set("value", Value::Number(interp_value));
-        frame_bindings.set("transitionProgress", Value::Number(transition_progress));
-
         // `Some` only during Show so element animations (pulse etc.) stay
         // paused while the OSD is fading in or out.
         let phase = self.current_phase();
@@ -616,12 +638,17 @@ impl State {
             }
             self.buffers.len() - 1
         };
-        let pm = match self.renderer.render_cached(
-            self.theme.as_ref().unwrap(),
-            &frame_bindings,
-            show_elapsed,
-        ) {
-            Ok(p) => p,
+        let result = with_frame_bindings(
+            self.bindings.as_mut().unwrap(),
+            interp_value,
+            transition_progress,
+            |bindings| {
+                self.renderer
+                    .render_cached(self.theme.as_ref().unwrap(), bindings, show_elapsed)
+            },
+        );
+        let pm = match result {
+            Ok(pm) => pm,
             Err(e) => {
                 tracing::warn!("render: {e}");
                 return false;
@@ -705,6 +732,7 @@ impl State {
                         p.source,
                         p.event,
                         false,
+                        p.show_override,
                     );
                 }
             }
@@ -720,6 +748,42 @@ impl State {
             }
         }
     }
+}
+
+fn surface_for_send(theme: &Theme, show_override: Option<Duration>) -> ThemeSurface {
+    let mut surface = theme.surface.clone();
+    if let Some(show) = show_override {
+        surface.show = show;
+    }
+    surface
+}
+
+/// Animate only the two values the renderer overrides; all other bindings retain
+/// their original send-time values (including progress and style expressions).
+fn with_frame_bindings<R>(
+    bindings: &mut Bindings,
+    value: f64,
+    progress: f64,
+    render: impl FnOnce(&Bindings) -> R,
+) -> R {
+    let old_value = std::mem::replace(
+        bindings.vars.get_mut("value").expect("send value binding"),
+        Value::Number(value),
+    );
+    let old_progress = std::mem::replace(
+        bindings
+            .vars
+            .get_mut("transitionProgress")
+            .expect("frame progress binding"),
+        Value::Number(progress),
+    );
+    let result = render(bindings);
+    *bindings.vars.get_mut("value").expect("send value binding") = old_value;
+    *bindings
+        .vars
+        .get_mut("transitionProgress")
+        .expect("frame progress binding") = old_progress;
+    result
 }
 
 /// Preserve phase boundaries and the final transition value even when an animation
@@ -985,5 +1049,81 @@ mod tests {
             next_frame_deadline(now, now, end, end, now, true),
             now + ELEMENT_INTERVAL
         );
+    }
+    #[test]
+    fn bounded_channel_preserves_accepted_order_and_shared_theme() {
+        let theme = crate::theme_loader::load_embedded().unwrap().theme;
+        let (surface, receiver) = SurfaceHandle::channel();
+        for i in 0..64 {
+            surface
+                .render(
+                    Arc::clone(&theme),
+                    Bindings::new(),
+                    0.0,
+                    Duration::ZERO,
+                    None,
+                    None,
+                    i.to_string(),
+                    i % 2 == 0,
+                    Some(Duration::from_millis(i)),
+                )
+                .unwrap();
+        }
+        assert_eq!(
+            surface.retheme(Arc::clone(&theme), None),
+            Err(SurfaceSendError::Busy)
+        );
+        for i in 0..64 {
+            match receiver.try_recv().unwrap() {
+                SurfaceCommand::Render {
+                    theme: queued_theme,
+                    event,
+                    preempt,
+                    show_override,
+                    ..
+                } => {
+                    assert!(Arc::ptr_eq(&theme, &queued_theme));
+                    assert_eq!(event, i.to_string());
+                    assert_eq!(preempt, i % 2 == 0);
+                    assert_eq!(show_override, Some(Duration::from_millis(i)));
+                }
+                _ => panic!("expected accepted render command"),
+            }
+        }
+        assert!(receiver.try_recv().is_err());
+        surface.retheme(theme, None).unwrap();
+    }
+
+    #[test]
+    fn timeout_overrides_do_not_modify_shared_theme() {
+        let theme = crate::theme_loader::load_embedded().unwrap().theme;
+        let original = theme.surface.show;
+        assert_eq!(
+            surface_for_send(&theme, Some(Duration::ZERO)).show,
+            Duration::ZERO
+        );
+        assert_eq!(
+            surface_for_send(&theme, Some(Duration::from_secs(7))).show,
+            Duration::from_secs(7)
+        );
+        assert_eq!(surface_for_send(&theme, None).show, original);
+        assert_eq!(theme.surface.show, original);
+    }
+
+    #[test]
+    fn frame_overrides_restore_bindings_even_when_rendering_fails() {
+        let mut bindings = Bindings::new();
+        bindings.set("value", Value::Number(75.0));
+        bindings.set("transitionProgress", Value::String("theme-defined".into()));
+        bindings.set("progress", Value::Number(0.75));
+        let original = bindings.vars.clone();
+        let result: Result<(), &str> = with_frame_bindings(&mut bindings, 30.0, 0.25, |frame| {
+            assert_eq!(frame.get("value"), Value::Number(30.0));
+            assert_eq!(frame.get("transitionProgress"), Value::Number(0.25));
+            assert_eq!(frame.get("progress"), Value::Number(0.75));
+            Err("render failed")
+        });
+        assert!(result.is_err());
+        assert_eq!(bindings.vars, original);
     }
 }

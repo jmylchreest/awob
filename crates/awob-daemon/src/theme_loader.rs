@@ -14,6 +14,7 @@
 //! event, the daemon re-parses and atomically swaps the active [`Theme`].
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use awob_core::{Theme, ThemeError, parse_theme, parse_theme_with_base};
 
@@ -36,7 +37,7 @@ pub enum LoadError {
 #[derive(Debug, Clone)]
 pub struct LoadedTheme {
     pub name: String,
-    pub theme: Theme,
+    pub theme: Arc<Theme>,
     /// Directory the theme was loaded from; the icon resolver searches
     /// `<source_dir>/icons/<name>.{svg,png}` before system icon themes.
     /// `None` for the embedded default.
@@ -81,7 +82,7 @@ pub fn load(
         let scene_abs = std::fs::canonicalize(&scene).unwrap_or(scene);
         LoadedTheme {
             name: name.into(),
-            theme,
+            theme: Arc::new(theme),
             source_dir: Some(dir),
             scene_path: Some(scene_abs),
         }
@@ -92,7 +93,7 @@ pub fn load(
     };
 
     if let Some(overlay_path) = force_palette {
-        apply_force_palette(&mut loaded.theme, overlay_path)?;
+        apply_force_palette(Arc::make_mut(&mut loaded.theme), overlay_path)?;
     }
     Ok(loaded)
 }
@@ -103,7 +104,7 @@ pub fn load_embedded() -> Result<LoadedTheme, LoadError> {
     let theme = parse_theme(EMBEDDED_DEFAULT_SCENE)?;
     Ok(LoadedTheme {
         name: EMBEDDED_DEFAULT_NAME.into(),
-        theme,
+        theme: Arc::new(theme),
         source_dir: None,
         scene_path: None,
     })
