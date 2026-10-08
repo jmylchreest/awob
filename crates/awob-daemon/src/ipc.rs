@@ -38,11 +38,21 @@ impl ConnectionLimiter {
     }
 
     pub fn try_acquire(&self) -> Option<ConnectionPermit> {
-        self.active
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
-                (count < MAX_CONNECTIONS).then_some(count + 1)
-            })
-            .ok()?;
+        let mut count = self.active.load(Ordering::Relaxed);
+        loop {
+            if count >= MAX_CONNECTIONS {
+                return None;
+            }
+            match self.active.compare_exchange_weak(
+                count,
+                count + 1,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => break,
+                Err(current) => count = current,
+            }
+        }
         Some(ConnectionPermit {
             active: Arc::clone(&self.active),
         })
