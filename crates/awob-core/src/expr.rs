@@ -58,7 +58,20 @@ pub enum ExprError {
     Type(String),
 }
 
+const MAX_EXPRESSION_BYTES: usize = 16 * 1024;
+const MAX_SYNTAX_BYTES: usize = 128;
+
+/// Bound parsed expressions before recursive parsing, evaluation, cloning or drop.
+///
+/// The limits apply to source input; manually constructed public [`Expr`] trees
+/// remain the caller's responsibility. Literal template segments are unaffected.
+///
+/// ```
+/// let expression = awob_core::expr::parse("$value / $max * 100")?;
+/// # Ok::<(), awob_core::expr::ExprError>(())
+/// ```
 pub fn parse(s: &str) -> Result<Expr, ExprError> {
+    check_complexity(s)?;
     let mut p = Parser { src: s, pos: 0 };
     let e = p.parse_ternary()?;
     p.skip_ws();
@@ -69,6 +82,50 @@ pub fn parse(s: &str) -> Result<Expr, ExprError> {
         });
     }
     Ok(e)
+}
+
+/// Count unquoted syntax rather than only parentheses: a flat `1+1+...` creates
+/// a left-deep tree whose evaluation and destructor recurse just like nesting.
+fn check_complexity(source: &str) -> Result<(), ExprError> {
+    if source.len() > MAX_EXPRESSION_BYTES {
+        return Err(ExprError::Parse {
+            msg: "expression exceeds 16 KiB".into(),
+            pos: 0,
+        });
+    }
+    let bytes = source.as_bytes();
+    let mut i = 0;
+    let mut syntax = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            quote @ (b'\'' | b'"') => {
+                i += 1;
+                while i < bytes.len() {
+                    if bytes[i] == b'\\' {
+                        i = (i + 2).min(bytes.len());
+                    } else if bytes[i] == quote {
+                        i += 1;
+                        break;
+                    } else {
+                        i += 1;
+                    }
+                }
+            }
+            b'(' | b')' | b'?' | b':' | b'+' | b'-' | b'*' | b'/' | b'%' | b'!' | b'<' | b'>'
+            | b'=' | b',' => {
+                syntax += 1;
+                if syntax > MAX_SYNTAX_BYTES {
+                    return Err(ExprError::Parse {
+                        msg: "expression exceeds 128 unquoted operator/delimiter bytes".into(),
+                        pos: i,
+                    });
+                }
+                i += 1;
+            }
+            _ => i += 1,
+        }
+    }
+    Ok(())
 }
 
 pub fn eval(e: &Expr, b: &Bindings) -> Result<Value, ExprError> {
@@ -788,5 +845,109 @@ mod tests {
         // bare `$` not followed by ident is literal
         let t = Template::parse("$ alone").unwrap();
         assert_eq!(t.render(&b()).unwrap(), "$ alone");
+    }
+    #[test]
+    fn security_expression_limits_bound_recursive_and_left_associated_forms() {
+        let cases = [
+            (
+                format!("{}1", "!".repeat(128)),
+                format!("{}1", "!".repeat(129)),
+            ),
+            (
+                format!("{}1{}", "(".repeat(64), ")".repeat(64)),
+                format!("{}1{}", "(".repeat(65), ")".repeat(65)),
+            ),
+            (
+                format!("{}1{}", "int(".repeat(64), ")".repeat(64)),
+                format!("{}1{}", "int(".repeat(65), ")".repeat(65)),
+            ),
+            (
+                format!("{}2", "0 ? 1 : ".repeat(64)),
+                format!("{}2", "0 ? 1 : ".repeat(65)),
+            ),
+            (
+                format!("{}1", "1 + ".repeat(128)),
+                format!("{}1", "1 + ".repeat(129)),
+            ),
+            (
+                format!("{}1", "null ?? ".repeat(64)),
+                format!("{}1", "null ?? ".repeat(65)),
+            ),
+        ];
+        for (allowed, rejected) in cases {
+            // Exercise parse, eval, clone and drop on the default daemon stack.
+            std::thread::Builder::new()
+                .stack_size(2 * 1024 * 1024)
+                .spawn(move || {
+                    let expr = parse(&allowed).unwrap();
+                    eval(&expr, &Bindings::default()).unwrap();
+                    drop(expr.clone());
+                    assert!(
+                        parse(&rejected).is_err(),
+                        "over-limit expression was accepted"
+                    );
+                })
+                .unwrap()
+                .join()
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn security_expression_byte_limit_applies_at_exact_boundary() {
+        let at_limit = format!("'{}'", "x".repeat(16 * 1024 - 2));
+        assert!(parse(&at_limit).is_ok());
+        assert!(parse(&(at_limit + " ")).is_err());
+    }
+
+    #[test]
+    fn security_expression_limits_ignore_escaped_quoted_syntax() {
+        let punctuation = "()?:+-*/%!<>=,".repeat(200);
+        for quote in ['\'', '"'] {
+            let source = format!("{quote}{punctuation}\\{quote}{punctuation}{quote}");
+            let expr = parse(&source).unwrap();
+            assert_eq!(
+                eval(&expr, &Bindings::default()).unwrap().as_string(),
+                format!("{punctuation}{quote}{punctuation}")
+            );
+        }
+        let source = format!("'{}' + {}1", "!".repeat(1000), "!".repeat(128));
+        assert!(
+            parse(&source).is_err(),
+            "syntax after quoted content must still count"
+        );
+    }
+
+    #[test]
+    fn security_expression_limits_preserve_long_template_literals_and_icons() {
+        let literal = "long-label ".repeat(2000);
+        assert_eq!(
+            Template::parse(&literal)
+                .unwrap()
+                .render(&Bindings::default())
+                .unwrap(),
+            literal
+        );
+        let icon = format!("data:image/svg+xml;base64,{}", "a".repeat(32 * 1024));
+        assert_eq!(
+            Template::parse(&icon)
+                .unwrap()
+                .render(&Bindings::default())
+                .unwrap(),
+            icon
+        );
+        assert!(Template::parse(&format!("label {{{}1}}", "!".repeat(129))).is_err());
+    }
+
+    #[test]
+    fn security_expression_limit_errors_propagate_through_theme_attributes() {
+        let source = format!("scene {{ text value=\"{{{}1}}\"; }}", "!".repeat(129));
+        assert!(matches!(
+            crate::theme::parse(&source),
+            Err(crate::theme::ThemeError::Expr {
+                source: ExprError::Parse { .. },
+                ..
+            })
+        ));
     }
 }
