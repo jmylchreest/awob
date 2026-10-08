@@ -378,6 +378,7 @@ jobs:
             IdentitiesOnly yes
             StrictHostKeyChecking yes
             HostKeyAlgorithms ssh-ed25519
+            UserKnownHostsFile ~/.ssh/known_hosts
             GlobalKnownHostsFile /dev/null
             UpdateHostKeys no
           CONF
