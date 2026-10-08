@@ -33,7 +33,7 @@ pub enum RenderError {
 /// cache. Construct once per daemon process and call [`Renderer::render_cached`]
 /// per-frame — the heavy state is reused across renders.
 pub struct Renderer {
-    text: TextRenderer,
+    text: Option<TextRenderer>,
     icons: IconResolver,
     shadows: crate::shadow::ShadowCache,
     frame: Option<Pixmap>,
@@ -50,12 +50,39 @@ impl Default for Renderer {
 impl Renderer {
     pub fn new() -> Self {
         Self {
-            text: TextRenderer::new(),
+            text: None,
             icons: IconResolver::new(),
             shadows: crate::shadow::ShadowCache::new(),
             frame: None,
             z_order: Vec::new(),
             layouts: LayoutCache::default(),
+        }
+    }
+
+    /// Discover fonts ahead of the first frame when a theme contains text.
+    ///
+    /// Bar/image-only themes skip font discovery. Conditional text still
+    /// prewarms, since evaluating its current label does not predict later
+    /// events. Call this when publishing a theme to keep discovery out of the
+    /// first frame; direct render calls also initialize text lazily if needed.
+    ///
+    /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let theme = awob_core::theme::parse("surface {}; scene {}")?;
+    /// let mut renderer = awob_core::render::Renderer::new();
+    /// renderer.prepare_theme(&theme);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn prepare_theme(&mut self, theme: &Theme) {
+        if self.text.is_none()
+            && theme
+                .scene
+                .elements
+                .iter()
+                .any(|element| matches!(element, Element::Text(_)))
+        {
+            self.text = Some(TextRenderer::new());
         }
     }
 
@@ -78,7 +105,9 @@ impl Renderer {
     pub fn invalidate_caches(&mut self) {
         self.icons.clear_cache();
         self.shadows.clear();
-        self.text.clear_glyph_cache();
+        if let Some(text) = &mut self.text {
+            text.clear_glyph_cache();
+        }
         self.layouts.clear();
     }
 
@@ -242,6 +271,7 @@ impl Renderer {
         if label.is_empty() {
             return Ok(());
         }
+        let text = self.text.get_or_insert_with(TextRenderer::new);
         let mut layout = if let Some(cached) = self.layouts.take(&label, t.font.as_deref()) {
             cached
         } else {
@@ -249,7 +279,7 @@ impl Renderer {
                 Some(f) => FontSpec::parse(f),
                 None => FontSpec::default(),
             };
-            let buffer = self.text.shape(&label, &font_spec);
+            let buffer = text.shape(&label, &font_spec);
             LayoutEntry::new(label, t.font.clone(), buffer)
         };
         let (text_w, text_h) = TextRenderer::measure_shaped(&layout.buffer);
@@ -260,7 +290,7 @@ impl Renderer {
             .as_ref()
             .and_then(|a| try_render_colour(a, b))
             .unwrap_or(Colour::rgb(0xff, 0xff, 0xff));
-        self.text.draw_shaped(
+        text.draw_shaped(
             pm,
             bb_x,
             bb_y,
@@ -1106,5 +1136,69 @@ scene {
         let repeated = renderer.render_cached(&theme, &b, None).unwrap();
         assert_eq!(repeated.data(), first.data());
         assert_eq!(renderer.layouts.len(), 0);
+    }
+
+    #[test]
+    fn bar_only_themes_do_not_initialize_fonts() {
+        let theme = parse(DEFAULT_KDL).unwrap();
+        let b = make_bindings(&theme);
+        let mut renderer = Renderer::new();
+        renderer.prepare_theme(&theme);
+        renderer.render_cached(&theme, &b, None).unwrap();
+        assert!(renderer.text.is_none());
+        renderer.invalidate_caches();
+        assert!(renderer.text.is_none());
+    }
+
+    #[test]
+    fn conditional_text_prewarms_once_and_matches_lazy_rendering() {
+        let theme = parse(
+            r##"
+            surface { width 180; height 48 }
+            scene { text value="{$app ?? ''}" x=2 y=3 font="sans-serif 14" }
+        "##,
+        )
+        .unwrap();
+        let mut b = make_bindings(&theme);
+        let mut prepared = Renderer::new();
+        prepared.prepare_theme(&theme);
+        assert!(prepared.text.is_some());
+        let original_family = prepared
+            .text
+            .as_ref()
+            .unwrap()
+            .font_system
+            .db()
+            .family_name(&cosmic_text::Family::SansSerif)
+            .to_owned();
+        prepared
+            .text
+            .as_mut()
+            .unwrap()
+            .font_system
+            .db_mut()
+            .set_sans_serif_family("prewarm-sentinel");
+        prepared.prepare_theme(&theme);
+        assert_eq!(
+            prepared
+                .text
+                .as_ref()
+                .unwrap()
+                .font_system
+                .db()
+                .family_name(&cosmic_text::Family::SansSerif),
+            "prewarm-sentinel"
+        );
+        prepared
+            .text
+            .as_mut()
+            .unwrap()
+            .font_system
+            .db_mut()
+            .set_sans_serif_family(original_family);
+        b.set("app", Value::String("Volume".into()));
+        let expected = prepared.render(&theme, &b, None).unwrap();
+        let actual = Renderer::new().render(&theme, &b, None).unwrap();
+        assert_eq!(actual.data(), expected.data());
     }
 }

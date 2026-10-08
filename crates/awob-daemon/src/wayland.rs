@@ -160,7 +160,9 @@ impl From<calloop::Error> for WaylandError {
 
 /// Spawn a Wayland event-loop thread. Returns a handle for IPC threads to push
 /// pixmaps into the surface, and a JoinHandle the caller can keep around.
-pub fn spawn() -> Result<
+pub fn spawn(
+    initial_theme: Arc<Theme>,
+) -> Result<
     (
         SurfaceHandle,
         std::thread::JoinHandle<Result<(), WaylandError>>,
@@ -170,12 +172,12 @@ pub fn spawn() -> Result<
     let (handle, rx) = SurfaceHandle::channel();
     let join = std::thread::Builder::new()
         .name("awob-wayland".into())
-        .spawn(move || run(rx))
+        .spawn(move || run(rx, initial_theme))
         .map_err(|e| WaylandError::Calloop(format!("thread spawn: {e}")))?;
     Ok((handle, join))
 }
 
-fn run(loop_rx: Channel<SurfaceCommand>) -> Result<(), WaylandError> {
+fn run(loop_rx: Channel<SurfaceCommand>, initial_theme: Arc<Theme>) -> Result<(), WaylandError> {
     let conn = Connection::connect_to_env()?;
     let (globals, event_queue) = registry_queue_init::<State>(&conn)?;
     let qh = event_queue.handle();
@@ -191,6 +193,10 @@ fn run(loop_rx: Channel<SurfaceCommand>) -> Result<(), WaylandError> {
         EventLoop::try_new().map_err(|e| WaylandError::Calloop(e.to_string()))?;
 
     let pool = SlotPool::new(360 * 64 * 4, &shm).map_err(|e| WaylandError::Shm(e.to_string()))?;
+
+    let mut renderer = Renderer::new();
+    renderer.prepare_theme(&initial_theme);
+    drop(initial_theme);
 
     let mut state = State {
         registry_state,
@@ -209,7 +215,7 @@ fn run(loop_rx: Channel<SurfaceCommand>) -> Result<(), WaylandError> {
         target_value: 0.0,
         sent_at: Instant::now(),
         transition_duration: Duration::from_millis(180),
-        renderer: Renderer::new(),
+        renderer,
         cycle_start: None,
         surface_def: ThemeSurface::default(),
         qh: qh.clone(),
@@ -390,6 +396,7 @@ impl State {
         is_continuity: bool,
         show_override: Option<Duration>,
     ) {
+        self.renderer.prepare_theme(&theme);
         let surface = surface_for_send(&theme, show_override);
         if self.layer.is_none() {
             self.create_layer(&surface);
@@ -454,6 +461,7 @@ impl State {
     /// refresh on the next send.
     fn retheme(&mut self, theme: Arc<Theme>, theme_dir: Option<std::path::PathBuf>) {
         self.renderer.invalidate_caches();
+        self.renderer.prepare_theme(&theme);
         self.renderer.set_theme_dir(theme_dir);
         if self.theme.is_none() || self.bindings.is_none() {
             return;
