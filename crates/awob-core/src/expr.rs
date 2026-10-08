@@ -237,6 +237,13 @@ fn call_builtin(name: &str, args: &[Expr], b: &Bindings) -> Result<Value, ExprEr
                 .get(2)
                 .and_then(Value::as_number)
                 .unwrap_or(f64::INFINITY);
+            // f64::clamp panics for invalid bounds; themes must return an error
+            // instead of unwinding the renderer or request handler.
+            if lo.is_nan() || hi.is_nan() || lo > hi {
+                return Err(ExprError::Type(
+                    "clamp requires ordered, non-NaN bounds".into(),
+                ));
+            }
             Ok(Value::Number(v.clamp(lo, hi)))
         }
         "lerp" => {
@@ -949,5 +956,70 @@ mod tests {
                 ..
             })
         ));
+    }
+    #[test]
+    fn clamp_rejects_unordered_or_nan_bounds_without_panicking() {
+        assert!(matches!(
+            eval(&parse("clamp(0, 1, 0)").unwrap(), &Bindings::default()),
+            Err(ExprError::Type(_))
+        ));
+        let expr = parse("clamp($value, $lo, $hi)").unwrap();
+        for (lo, hi) in [
+            (2.0, 1.0),
+            (f64::NAN, 1.0),
+            (0.0, f64::NAN),
+            (f64::NAN, f64::NAN),
+            (f64::INFINITY, f64::NEG_INFINITY),
+        ] {
+            let mut bindings = Bindings::default();
+            bindings.set("value", Value::Number(0.5));
+            bindings.set("lo", Value::Number(lo));
+            bindings.set("hi", Value::Number(hi));
+            assert!(
+                matches!(eval(&expr, &bindings), Err(ExprError::Type(_))),
+                "{lo}..{hi}"
+            );
+        }
+    }
+
+    #[test]
+    fn clamp_preserves_valid_equal_infinite_and_default_bounds() {
+        let expr = parse("clamp($value, $lo, $hi)").unwrap();
+        for (value, lo, hi, expected) in [
+            (42.0, f64::NEG_INFINITY, f64::INFINITY, 42.0),
+            (-1.0, 0.0, f64::INFINITY, 0.0),
+            (1.0, f64::NEG_INFINITY, 0.0, 0.0),
+            (42.0, f64::INFINITY, f64::INFINITY, f64::INFINITY),
+            (
+                42.0,
+                f64::NEG_INFINITY,
+                f64::NEG_INFINITY,
+                f64::NEG_INFINITY,
+            ),
+            (42.0, 5.0, 5.0, 5.0),
+        ] {
+            let mut bindings = Bindings::default();
+            bindings.set("value", Value::Number(value));
+            bindings.set("lo", Value::Number(lo));
+            bindings.set("hi", Value::Number(hi));
+            assert_eq!(eval(&expr, &bindings).unwrap(), Value::Number(expected));
+        }
+        assert_eq!(
+            eval(&parse("clamp()").unwrap(), &Bindings::default()).unwrap(),
+            Value::Number(0.0)
+        );
+        assert_eq!(
+            eval(&parse("clamp(3, 1)").unwrap(), &Bindings::default()).unwrap(),
+            Value::Number(3.0)
+        );
+        let mut bindings = Bindings::default();
+        bindings.set("value", Value::Number(f64::NAN));
+        assert!(
+            eval(&parse("clamp($value, 0, 1)").unwrap(), &bindings)
+                .unwrap()
+                .as_number()
+                .unwrap()
+                .is_nan()
+        );
     }
 }
