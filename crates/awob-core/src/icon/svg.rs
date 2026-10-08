@@ -21,12 +21,17 @@ struct Budget {
 }
 
 fn charge(counter: &AtomicUsize, amount: usize, limit: usize) -> Result<(), IconError> {
-    counter
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |used| {
-            used.checked_add(amount).filter(|&total| total <= limit)
-        })
-        .map(|_| ())
-        .map_err(|_| IconError::TooLarge)
+    let mut used = counter.load(Ordering::Relaxed);
+    loop {
+        let total = used
+            .checked_add(amount)
+            .filter(|&total| total <= limit)
+            .ok_or(IconError::TooLarge)?;
+        match counter.compare_exchange_weak(used, total, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => return Ok(()),
+            Err(current) => used = current,
+        }
+    }
 }
 
 pub(super) fn parse(bytes: &[u8]) -> Result<usvg::Tree, IconError> {
