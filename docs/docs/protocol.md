@@ -52,6 +52,14 @@ Sending occasional bytes does not extend these deadlines. A timeout closes the
 connection; theme loading and other request processing are separate from the I/O
 budgets. Clients must not replay requests whose outcome is unknown after a lost
 connection.
+The Rust SDK accepts response lines up to 32 MiB, including the newline. This
+leaves room for escaped history-query results. Once connected, writing a request
+and reading its response share a two-second I/O budget; slowly streamed bytes do
+not restart it. A safe reconnect retry uses the remaining budget.
+
+Oversized, malformed, or timed-out responses close the transport. Requests are
+never replayed after any request bytes have been written, because the daemon may
+already have handled them. A subsequent listener event reconnects normally.
 
 ## Responses
 
