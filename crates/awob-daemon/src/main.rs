@@ -110,7 +110,7 @@ impl Shared {
         if let Some(accent_override) = &payload.accent {
             bindings.set("accent", awob_core::Value::String(accent_override.clone()));
         }
-        let summary = format!(
+        tracing::debug!(
             "send: event={} value={} max={} src={:?} style={:?} app={:?} icon={:?} \
              last_value={:?} last_max={:?}",
             payload.event,
@@ -123,7 +123,6 @@ impl Shared {
             last_value,
             last_max,
         );
-        tracing::debug!("{summary}");
         if let Some(handle) = &self.surface {
             let theme = Arc::clone(&self.theme.theme);
             let show_override = payload
@@ -573,15 +572,20 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         tracing::info!("supervisor: spawning {} listener(s)", effective.len());
         sup.spawn_all(effective, Some(server.path().to_path_buf()).as_ref());
     }
+    let needs_polling = sup.needs_polling();
     let sup = Arc::new(Mutex::new(sup));
 
-    {
+    if needs_polling {
         let sup = Arc::clone(&sup);
         let socket_for_sup = server.path().to_path_buf();
         thread::spawn(move || {
             loop {
                 std::thread::sleep(std::time::Duration::from_millis(250));
-                lock_or_recover(&sup, "supervisor(tick)").tick(Some(&socket_for_sup));
+                let mut supervisor = lock_or_recover(&sup, "supervisor(tick)");
+                supervisor.tick(Some(&socket_for_sup));
+                if !supervisor.needs_polling() {
+                    break;
+                }
             }
         });
     }

@@ -25,7 +25,7 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use awob_client::listener::wait_for_resource;
-use awob_client::{Client, Send};
+use awob_client::{ReconnectingClient, Send};
 use clap::Parser;
 use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
 
@@ -440,12 +440,11 @@ fn pick_visuals(pct: f64, state: BatteryState) -> (&'static str, &'static str) {
 }
 
 fn emit_osd(
-    socket: &Option<PathBuf>,
+    client: &mut ReconnectingClient,
     source: &str,
     pct: f64,
     state: BatteryState,
 ) -> awob_client::Result<()> {
-    let mut c = Client::connect_or_default(socket.as_deref())?;
     let (icon, style) = pick_visuals(pct, state);
     let app = format!("Battery: {}", state.slug());
     let s = Send::new("battery", pct)
@@ -454,10 +453,11 @@ fn emit_osd(
         .icon(icon)
         .style(style)
         .app(app);
-    c.send(s.build())
+    client.send(s.build())
 }
 
 fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
+    let mut client = ReconnectingClient::new(cli.socket.clone());
     let source = cli
         .source
         .clone()
@@ -499,7 +499,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     refresh_cache_from_sysfs(&mut cache, &batteries);
     evaluate_and_emit(
         &cache,
-        &cli.socket,
+        &mut client,
         &source,
         &state_filter,
         &alert_bands,
@@ -558,7 +558,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         if got_event || still_in_burst || due_for_rescan {
             evaluate_and_emit(
                 &cache,
-                &cli.socket,
+                &mut client,
                 &source,
                 &state_filter,
                 &alert_bands,
@@ -669,7 +669,7 @@ fn should_fire(
 
 fn evaluate_and_emit(
     cache: &std::collections::HashMap<String, BatteryReading>,
-    socket: &Option<PathBuf>,
+    client: &mut ReconnectingClient,
     source: &str,
     state_filter: &HashSet<BatteryState>,
     alert_bands: &HashSet<&'static str>,
@@ -688,7 +688,7 @@ fn evaluate_and_emit(
     if !fire_now {
         return;
     }
-    if let Err(e) = emit_osd(socket, source, pct, state) {
+    if let Err(e) = emit_osd(client, source, pct, state) {
         tracing::info!("send: {e}");
     }
 }

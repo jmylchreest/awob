@@ -200,13 +200,15 @@ The simplest path is to depend on `awob-client`:
 ```toml
 [dependencies]
 awob-client = "0.0"
+tracing = "0.1"
 ```
 
 ```rust
-use awob_client::{Client, Send};
+use awob_client::{ReconnectingClient, Send};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut client = Client::connect()?;        // honours AWOB_SOCKET
+    let socket = std::env::var_os("AWOB_SOCKET").map(std::path::PathBuf::from);
+    let mut client = ReconnectingClient::new(socket);
     loop {
         let value = read_upstream()?;            // your event source
         let payload = Send::new("volume", value)
@@ -218,10 +220,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .preempt(true)
             .auto_listener_id()                  // basename(argv[0]) if not set
             .build();
-        client.send(payload)?;
+        if let Err(error) = client.send(payload) {
+            tracing::warn!("send: {error}");
+        }
     }
 }
 ```
+
+`ReconnectingClient` opens a connection on the first event and reuses it. On a
+write failure it reconnects and retries once only if zero request bytes were
+written. Partial writes, timeouts and lost acknowledgements are returned to the
+caller without replaying the event; the next event opens a new connection. This
+avoids duplicate overlays when the daemon received a send but its response was
+lost. The PipeWire, battery, backlight, keyboard-backlight and power-profile
+listeners use this helper and log send failures.
 
 The `Send` builder validates field combinations and sets sensible
 defaults. `auto_listener_id()` is a convenience that fills

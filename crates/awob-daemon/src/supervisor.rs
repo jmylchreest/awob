@@ -57,6 +57,11 @@ impl Supervisor {
         }
     }
 
+    /// No worker is needed when no child can run or restart again.
+    pub fn needs_polling(&self) -> bool {
+        self.children.values().any(|state| !state.stopped)
+    }
+
     pub fn tick(&mut self, socket_path: Option<&PathBuf>) {
         let now = Instant::now();
         for (name, state) in self.children.iter_mut() {
@@ -238,6 +243,7 @@ mod tests {
     #[test]
     fn supervisor_handles_no_children_gracefully() {
         let mut s = Supervisor::new();
+        assert!(!s.needs_polling());
         s.tick(None);
         s.shutdown();
     }
@@ -261,5 +267,16 @@ mod tests {
         spawn_child(&mut state, None);
         assert!(state.process.is_none());
         assert!(state.backoff_idx > 0);
+        let mut supervisor = Supervisor::new();
+        supervisor.children.insert("missing".into(), state);
+        assert!(
+            supervisor.needs_polling(),
+            "a scheduled retry still needs ticks"
+        );
+        supervisor.children.get_mut("missing").unwrap().stopped = true;
+        assert!(
+            !supervisor.needs_polling(),
+            "terminal policies need no more ticks"
+        );
     }
 }
