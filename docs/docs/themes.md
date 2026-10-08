@@ -429,6 +429,15 @@ levels, and 10,000 KDL nodes (including ignored nodes). KDL child blocks, nested
 block comments, and consecutive slashdash markers are limited to 32 levels.
 These checks run before parsing. A failed reload keeps the current theme active.
 
+Each expression inside `{…}` allows at most 16 KiB of source and 128 unquoted
+operator or delimiter bytes (`()?:+-*/%!<>=,`). Every byte counts separately,
+including both characters of `??` or `<=`; punctuation in quoted string literals
+does not count. Expressions exceeding either limit fail theme loading. These
+limits cover nested expressions and long arithmetic chains, whose parsed trees
+also recurse during evaluation and cleanup. They do not shorten literal labels
+or inline icons outside interpolation; the existing text and asset limits below
+still apply. Manually constructed Rust `Expr` trees are outside this parser guard.
+
 Raster surfaces, PNG sources and icon targets accept axes from 1 to 8,192 pixels
 and at most 8,388,608 pixels. PNG decoded output is additionally limited to
 32 MiB, with an 8 MiB decoder scratch budget. Shadow masks use the same axis and
