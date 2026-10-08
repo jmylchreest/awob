@@ -422,6 +422,13 @@ the bar value. Useful if you want a wob-shaped slice of an OSD.
 
 ## Resource limits
 
+Scene files, imports, and forced palette files must be regular UTF-8 files of at
+most 1 MiB each. Symlinks to regular files work. A complete load, including a
+forced palette and its imports, allows 4 MiB of source, 64 imports, 16 import
+levels, and 10,000 KDL nodes (including ignored nodes). KDL child blocks, nested
+block comments, and consecutive slashdash markers are limited to 32 levels.
+These checks run before parsing. A failed reload keeps the current theme active.
+
 Raster surfaces, PNG sources and icon targets accept axes from 1 to 8,192 pixels
 and at most 8,388,608 pixels. PNG decoded output is additionally limited to
 32 MiB, with an 8 MiB decoder scratch budget. Shadow masks use the same axis and
