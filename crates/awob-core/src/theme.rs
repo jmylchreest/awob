@@ -33,6 +33,8 @@ pub struct Theme {
 
 #[derive(Debug, thiserror::Error)]
 pub enum ThemeError {
+    #[error("surface: {0}")]
+    Surface(#[from] crate::limits::RasterLimit),
     #[error("kdl parse: {0}")]
     Kdl(String),
     #[error("expected `{expected}` at node `{found}`")]
@@ -90,6 +92,7 @@ struct ThemeAccumulator {
 
 impl ThemeAccumulator {
     fn into_theme(self) -> Result<Theme, ThemeError> {
+        crate::limits::pixels(self.surface.width, self.surface.height)?;
         Ok(Theme {
             surface: self.surface,
             palette: self.palette,
@@ -152,14 +155,12 @@ fn parse_surface(
             let name = child.name().value();
             match name {
                 "width" => {
-                    if let Some(v) = node_int(child) {
-                        s.width = v as u32
-                    }
+                    let v = node_int(child).ok_or(crate::limits::RasterLimit)?;
+                    s.width = u32::try_from(v).map_err(|_| crate::limits::RasterLimit)?;
                 }
                 "height" => {
-                    if let Some(v) = node_int(child) {
-                        s.height = v as u32
-                    }
+                    let v = node_int(child).ok_or(crate::limits::RasterLimit)?;
+                    s.height = u32::try_from(v).map_err(|_| crate::limits::RasterLimit)?;
                 }
                 "anchor" => {
                     if let Some(v) = node_string(child) {
@@ -792,5 +793,21 @@ scene {
         assert!((parse_unit_fraction("0.4").unwrap() - 0.4).abs() < 0.001);
         // Out-of-range values clamp.
         assert!((parse_unit_fraction("150%").unwrap() - 1.0).abs() < 0.001);
+    }
+    #[test]
+    fn security_rejects_invalid_surface_dimensions() {
+        for dimensions in [
+            "width -1; height 1",
+            "width 0; height 1",
+            "width 8193; height 1",
+            "width 4096; height 4096",
+            "width 1.5; height 1",
+        ] {
+            assert!(
+                parse(&format!("surface {{ {dimensions}; }}; scene {{}}")).is_err(),
+                "{dimensions}"
+            );
+        }
+        assert!(parse("surface { width 3840; height 2160; }; scene {}").is_ok());
     }
 }

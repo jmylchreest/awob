@@ -21,6 +21,10 @@ use crate::theme::Theme;
 
 #[derive(Debug, thiserror::Error)]
 pub enum RenderError {
+    #[error(transparent)]
+    Raster(#[from] crate::limits::RasterLimit),
+    #[error(transparent)]
+    Text(#[from] crate::text::TextError),
     #[error("expression: {0}")]
     Expr(#[from] ExprError),
     #[error("attribute `{0}` could not resolve: {1}")]
@@ -124,8 +128,9 @@ impl Renderer {
         bindings: &Bindings,
         show_elapsed: Option<std::time::Duration>,
     ) -> Result<Pixmap, RenderError> {
-        let w = theme.surface.width.max(1);
-        let h = theme.surface.height.max(1);
+        let w = theme.surface.width;
+        let h = theme.surface.height;
+        crate::limits::pixels(w, h)?;
         let mut pixmap = Pixmap::new(w, h)
             .ok_or_else(|| RenderError::Other(format!("Pixmap::new({w},{h}) failed")))?;
         self.draw_frame(theme, bindings, show_elapsed, &mut pixmap)?;
@@ -154,8 +159,9 @@ impl Renderer {
         bindings: &Bindings,
         show_elapsed: Option<std::time::Duration>,
     ) -> Result<&Pixmap, RenderError> {
-        let w = theme.surface.width.max(1);
-        let h = theme.surface.height.max(1);
+        let w = theme.surface.width;
+        let h = theme.surface.height;
+        crate::limits::pixels(w, h)?;
         let mut pixmap = match self.frame.take() {
             Some(pm) if pm.width() == w && pm.height() == h => pm,
             _ => Pixmap::new(w, h)
@@ -279,7 +285,7 @@ impl Renderer {
                 Some(f) => FontSpec::parse(f),
                 None => FontSpec::default(),
             };
-            let buffer = text.shape(&label, &font_spec);
+            let buffer = text.shape(&label, &font_spec)?;
             LayoutEntry::new(label, t.font.clone(), buffer)
         };
         let (text_w, text_h) = TextRenderer::measure_shaped(&layout.buffer);
@@ -424,7 +430,7 @@ impl Renderer {
                 .map(|a| a.render_number(b))
                 .transpose()?
                 .unwrap_or(0.0) as f32;
-            self.draw_shadow(pm, bb, radius, spec);
+            self.draw_shadow(pm, bb, radius, spec)?;
         }
         draw_rect(r, frame, b, alpha_mul, pm)
     }
@@ -435,16 +441,16 @@ impl Renderer {
         bb: Box2,
         radius: f32,
         spec: crate::shadow::ShadowSpec,
-    ) {
+    ) -> Result<(), RenderError> {
         let w = bb.w.round().max(0.0) as u32;
         let h = bb.h.round().max(0.0) as u32;
         if w == 0 || h == 0 || spec.colour.a == 0 {
-            return;
+            return Ok(());
         }
         let radius_u = radius.round().max(0.0) as u32;
         let blur_u = spec.blur_radius.round().max(0.0) as u32;
         let pad = crate::shadow::shadow_padding(blur_u) as f32;
-        let (mw, mh, mask) = self.shadows.get_or_compute(w, h, radius_u, blur_u);
+        let (mw, mh, mask) = self.shadows.get_or_compute(w, h, radius_u, blur_u)?;
         blit_shadow_mask(
             pm,
             mask,
@@ -455,6 +461,7 @@ impl Renderer {
             spec.colour,
         );
         self.shadows.release_transient();
+        Ok(())
     }
 }
 
@@ -1200,5 +1207,20 @@ scene {
         let expected = prepared.render(&theme, &b, None).unwrap();
         let actual = Renderer::new().render(&theme, &b, None).unwrap();
         assert_eq!(actual.data(), expected.data());
+    }
+
+    #[test]
+    fn security_mutated_surface_is_rejected_before_allocation() {
+        let mut theme = parse(DEFAULT_KDL).unwrap();
+        theme.scene.elements.clear();
+        theme.surface.width = 8193;
+        theme.surface.height = 1;
+        let mut renderer = Renderer::new();
+        assert!(renderer.render(&theme, &Bindings::default(), None).is_err());
+        assert!(
+            renderer
+                .render_cached(&theme, &Bindings::default(), None)
+                .is_err()
+        );
     }
 }
