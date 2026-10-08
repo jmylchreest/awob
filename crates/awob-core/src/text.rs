@@ -36,8 +36,11 @@ impl TextRenderer {
 
     /// Returns (width_px, height_px) for the text laid out with the given font.
     pub fn measure(&mut self, text: &str, font_spec: &FontSpec) -> (f32, f32) {
-        let mut buffer = self.shape(text, font_spec);
-        buffer.shape_until_scroll(&mut self.font_system, false);
+        let buffer = self.shape(text, font_spec);
+        Self::measure_shaped(&buffer)
+    }
+
+    pub(crate) fn measure_shaped(buffer: &Buffer) -> (f32, f32) {
         let mut max_w: f32 = 0.0;
         let mut max_y: f32 = 0.0;
         for run in buffer.layout_runs() {
@@ -59,7 +62,17 @@ impl TextRenderer {
         colour: Colour,
     ) {
         let mut buffer = self.shape(text, font_spec);
-        buffer.shape_until_scroll(&mut self.font_system, false);
+        self.draw_shaped(pm, x, y, &mut buffer, colour);
+    }
+
+    pub(crate) fn draw_shaped(
+        &mut self,
+        pm: &mut Pixmap,
+        x: f32,
+        y: f32,
+        buffer: &mut Buffer,
+        colour: Colour,
+    ) {
         let cosmic_color = cosmic_text::Color::rgba(colour.r, colour.g, colour.b, colour.a);
         let pm_w = pm.width() as i32;
         let pm_h = pm.height() as i32;
@@ -112,7 +125,7 @@ impl TextRenderer {
         );
     }
 
-    fn shape(&mut self, text: &str, spec: &FontSpec) -> Buffer {
+    pub(crate) fn shape(&mut self, text: &str, spec: &FontSpec) -> Buffer {
         let metrics = Metrics::new(spec.size, spec.size * 1.25);
         let mut buffer = Buffer::new(&mut self.font_system, metrics);
         // CSS generic family names map to cosmic-text's generic enum
@@ -139,6 +152,7 @@ impl TextRenderer {
             });
         buffer.set_size(Some(10_000.0), Some(spec.size * 4.0));
         buffer.set_text(text, &attrs, Shaping::Advanced, None);
+        buffer.shape_until_scroll(&mut self.font_system, false);
         buffer
     }
 }
@@ -282,5 +296,36 @@ mod tests {
         assert_eq!(FontSpec::parse("Inter 14 bold").weight, 700);
         assert_eq!(FontSpec::parse("Inter 14 light").weight, 300);
         assert_eq!(FontSpec::parse("DejaVu medium 12").weight, 500);
+    }
+
+    #[test]
+    fn shared_shape_matches_separate_measure_and_draw() {
+        let mut renderer = TextRenderer::new();
+        for label in ["Volume 75%", "mute", "مرحبا", "A\nsecond line", ""] {
+            for font in ["sans-serif 14", "monospace 17 bold", "serif 12 italic"] {
+                let spec = FontSpec::parse(font);
+                let expected_size = renderer.measure(label, &spec);
+                let mut expected = Pixmap::new(180, 50).unwrap();
+                renderer.draw(
+                    &mut expected,
+                    -2.0,
+                    3.0,
+                    label,
+                    &spec,
+                    Colour::rgb(83, 149, 231),
+                );
+                let mut buffer = renderer.shape(label, &spec);
+                assert_eq!(TextRenderer::measure_shaped(&buffer), expected_size);
+                let mut actual = Pixmap::new(180, 50).unwrap();
+                renderer.draw_shaped(
+                    &mut actual,
+                    -2.0,
+                    3.0,
+                    &mut buffer,
+                    Colour::rgb(83, 149, 231),
+                );
+                assert_eq!(actual.data(), expected.data(), "{label:?}, {font}");
+            }
+        }
     }
 }

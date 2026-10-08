@@ -29,12 +29,14 @@ pub enum RenderError {
 }
 
 /// Stateful renderer holding a text shaper, icon cache, and shadow-mask
-/// cache. Construct once per daemon process and call [`Renderer::render`]
-/// per-send — the heavy state is reused across renders.
+/// cache. Construct once per daemon process and call [`Renderer::render_cached`]
+/// per-frame — the heavy state is reused across renders.
 pub struct Renderer {
     text: TextRenderer,
     icons: IconResolver,
     shadows: crate::shadow::ShadowCache,
+    frame: Option<Pixmap>,
+    z_order: Vec<usize>,
 }
 
 impl Default for Renderer {
@@ -49,6 +51,8 @@ impl Renderer {
             text: TextRenderer::new(),
             icons: IconResolver::new(),
             shadows: crate::shadow::ShadowCache::new(),
+            frame: None,
+            z_order: Vec::new(),
         }
     }
 
@@ -75,20 +79,75 @@ impl Renderer {
         let h = theme.surface.height.max(1);
         let mut pixmap = Pixmap::new(w, h)
             .ok_or_else(|| RenderError::Other(format!("Pixmap::new({w},{h}) failed")))?;
-        pixmap.fill(SkColor::TRANSPARENT);
-
-        let frame = Frame {
-            w: w as f32,
-            h: h as f32,
-        };
-
-        let elements = sorted_by_z(&theme.scene.elements);
-        for element in elements {
-            let alpha_mul = element_alpha_mul(element, show_elapsed);
-            self.draw_element(element, &frame, bindings, alpha_mul, &mut pixmap)?;
-        }
-
+        self.draw_frame(theme, bindings, show_elapsed, &mut pixmap)?;
         Ok(pixmap)
+    }
+
+    /// Render into reusable storage, borrowing the completed frame.
+    ///
+    /// Pixels and animation evaluation match [`Self::render`]. The storage is
+    /// cleared every frame and replaced when the surface dimensions change.
+    /// Use [`Self::render`] when the frame needs to outlive the next render.
+    ///
+    /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// use awob_core::{bindings::Bindings, render::Renderer, theme};
+    /// let theme = theme::parse("surface { width 8; height 8; }; scene {}")?;
+    /// let mut renderer = Renderer::new();
+    /// let frame = renderer.render_cached(&theme, &Bindings::default(), None)?;
+    /// assert_eq!(frame.width(), 8);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn render_cached(
+        &mut self,
+        theme: &Theme,
+        bindings: &Bindings,
+        show_elapsed: Option<std::time::Duration>,
+    ) -> Result<&Pixmap, RenderError> {
+        let w = theme.surface.width.max(1);
+        let h = theme.surface.height.max(1);
+        let mut pixmap = match self.frame.take() {
+            Some(pm) if pm.width() == w && pm.height() == h => pm,
+            _ => Pixmap::new(w, h)
+                .ok_or_else(|| RenderError::Other(format!("Pixmap::new({w},{h}) failed")))?,
+        };
+        let result = self.draw_frame(theme, bindings, show_elapsed, &mut pixmap);
+        // Retain storage even on an expression error; the next render clears it.
+        self.frame = Some(pixmap);
+        result?;
+        Ok(self
+            .frame
+            .as_ref()
+            .expect("frame was restored after drawing"))
+    }
+
+    fn draw_frame(
+        &mut self,
+        theme: &Theme,
+        bindings: &Bindings,
+        show_elapsed: Option<std::time::Duration>,
+        pixmap: &mut Pixmap,
+    ) -> Result<(), RenderError> {
+        pixmap.fill(SkColor::TRANSPARENT);
+        let frame = Frame {
+            w: pixmap.width() as f32,
+            h: pixmap.height() as f32,
+        };
+        // The scene is publicly mutable. Rebuild ordering so edits and reloads
+        // take effect immediately, retaining only the index allocation.
+        let mut order = std::mem::take(&mut self.z_order);
+        order.clear();
+        order.extend(0..theme.scene.elements.len());
+        // The index tie-breaker preserves insertion order without sort scratch.
+        order.sort_unstable_by_key(|&index| (theme.scene.elements[index].z(), index));
+        let result = order.iter().try_for_each(|&index| {
+            let element = &theme.scene.elements[index];
+            let alpha_mul = element_alpha_mul(element, show_elapsed);
+            self.draw_element(element, &frame, bindings, alpha_mul, pixmap)
+        });
+        self.z_order = order;
+        result
     }
 }
 
@@ -118,12 +177,6 @@ fn element_alpha_mul(el: &Element, show_elapsed: Option<std::time::Duration>) ->
 /// and reuses it.
 pub fn render_to_pixmap(theme: &Theme, bindings: &Bindings) -> Result<Pixmap, RenderError> {
     Renderer::new().render(theme, bindings, None)
-}
-
-fn sorted_by_z(elements: &[Element]) -> Vec<&Element> {
-    let mut v: Vec<&Element> = elements.iter().collect();
-    v.sort_by_key(|e| e.z());
-    v
 }
 
 #[derive(Clone, Copy)]
@@ -173,7 +226,8 @@ impl Renderer {
             Some(f) => FontSpec::parse(f),
             None => FontSpec::default(),
         };
-        let (text_w, text_h) = self.text.measure(&label, &font_spec);
+        let mut buffer = self.text.shape(&label, &font_spec);
+        let (text_w, text_h) = TextRenderer::measure_shaped(&buffer);
         let bb_x = resolve_x(&t.common, frame, b, text_w)?;
         let bb_y = resolve_y(&t.common, frame, b, text_h)?;
         let colour = t
@@ -181,14 +235,8 @@ impl Renderer {
             .as_ref()
             .and_then(|a| try_render_colour(a, b))
             .unwrap_or(Colour::rgb(0xff, 0xff, 0xff));
-        self.text.draw(
-            pm,
-            bb_x,
-            bb_y,
-            &label,
-            &font_spec,
-            with_alpha(colour, alpha_mul),
-        );
+        self.text
+            .draw_shaped(pm, bb_x, bb_y, &mut buffer, with_alpha(colour, alpha_mul));
         Ok(())
     }
 
@@ -336,11 +384,9 @@ impl Renderer {
         let blur_u = spec.blur_radius.round().max(0.0) as u32;
         let pad = crate::shadow::shadow_padding(blur_u) as f32;
         let (mw, mh, mask) = self.shadows.get_or_compute(w, h, radius_u, blur_u);
-        // Owned copy lets us drop the cache borrow before mutably touching `pm`.
-        let owned: Vec<u8> = mask.to_vec();
         blit_shadow_mask(
             pm,
-            &owned,
+            mask,
             mw,
             mh,
             bb.x + spec.offset_x - pad,
@@ -871,5 +917,88 @@ scene {
         b.set("value", Value::Number(0.0));
         let pm = render_to_pixmap(&theme, &b).unwrap();
         assert_eq!(pm.width(), theme.surface.width);
+    }
+
+    #[test]
+    fn shape_pixels_match_baseline() {
+        let theme =
+            parse(&DEFAULT_KDL.replace("radius=12", "radius=12 shadow=\"0 2 4 rgba(0,0,0,0.4)\""))
+                .unwrap();
+        let b = make_bindings(&theme);
+        let pm = Renderer::new().render(&theme, &b, None).unwrap();
+        let hash = pm
+            .data()
+            .iter()
+            .fold(0xcbf2_9ce4_8422_2325u64, |hash, byte| {
+                (hash ^ u64::from(*byte)).wrapping_mul(0x100_0000_01b3)
+            });
+        // Captured from the original allocation-per-frame renderer.
+        assert_eq!(hash, 6_095_384_572_783_461_391);
+    }
+
+    #[test]
+    fn cached_frames_reuse_storage_clear_resize_and_recover_from_errors() {
+        let mut theme = parse(DEFAULT_KDL).unwrap();
+        let b = make_bindings(&theme);
+        let mut renderer = Renderer::new();
+        let expected = renderer.render(&theme, &b, None).unwrap();
+        let pm = renderer.render_cached(&theme, &b, None).unwrap();
+        assert_eq!(pm.data(), expected.data());
+        let storage = pm.data().as_ptr();
+        theme.scene.elements.clear();
+        let blank = renderer.render_cached(&theme, &b, None).unwrap();
+        assert_eq!(blank.data().as_ptr(), storage);
+        assert!(blank.data().iter().all(|byte| *byte == 0));
+
+        theme = parse(DEFAULT_KDL).unwrap();
+        if let Element::Rect(rect) = &mut theme.scene.elements[0] {
+            rect.size.width = AttrValue::parse("invalid").unwrap();
+        }
+        assert!(renderer.render_cached(&theme, &b, None).is_err());
+        theme.scene.elements.clear();
+        let recovered = renderer.render_cached(&theme, &b, None).unwrap();
+        assert_eq!(recovered.data().as_ptr(), storage);
+        assert!(recovered.data().iter().all(|byte| *byte == 0));
+
+        theme.surface.width = 23;
+        theme.surface.height = 17;
+        let resized = renderer.render_cached(&theme, &b, None).unwrap();
+        assert_eq!((resized.width(), resized.height()), (23, 17));
+        assert!(resized.data().iter().all(|byte| *byte == 0));
+    }
+
+    #[test]
+    fn cached_frames_honour_mutated_z_order_and_equal_z_insertion_order() {
+        let mut theme = parse(
+            r##"
+            surface { width 2; height 2 }
+            scene {
+                rect z=0 x=0 y=0 width=2 height=2 fill="#ff0000"
+                rect z=0 x=0 y=0 width=2 height=2 fill="#0000ff"
+            }
+        "##,
+        )
+        .unwrap();
+        let b = make_bindings(&theme);
+        let mut renderer = Renderer::new();
+        assert_eq!(
+            &renderer.render_cached(&theme, &b, None).unwrap().data()[..4],
+            &[0, 0, 255, 255]
+        );
+        if let Element::Rect(rect) = &mut theme.scene.elements[0] {
+            rect.common.z = 1;
+        }
+        assert_eq!(
+            &renderer.render_cached(&theme, &b, None).unwrap().data()[..4],
+            &[255, 0, 0, 255]
+        );
+        theme.scene.elements.swap(0, 1);
+        if let Element::Rect(rect) = &mut theme.scene.elements[1] {
+            rect.common.z = 0;
+        }
+        assert_eq!(
+            &renderer.render_cached(&theme, &b, None).unwrap().data()[..4],
+            &[255, 0, 0, 255]
+        );
     }
 }
