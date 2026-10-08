@@ -615,17 +615,17 @@ impl State {
             }
             self.buffers.len() - 1
         };
-        let pm =
-            match self
-                .renderer
-                .render(self.theme.as_ref().unwrap(), &frame_bindings, show_elapsed)
-            {
-                Ok(p) => p,
-                Err(e) => {
-                    tracing::warn!("render: {e}");
-                    return false;
-                }
-            };
+        let pm = match self.renderer.render_cached(
+            self.theme.as_ref().unwrap(),
+            &frame_bindings,
+            show_elapsed,
+        ) {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::warn!("render: {e}");
+                return false;
+            }
+        };
         let buffer = &self.buffers[index];
         let Some(canvas) = buffer.canvas(&mut self.pool) else {
             return false;
