@@ -2,6 +2,7 @@ mod config;
 mod ipc;
 mod known_listeners;
 mod requests;
+mod socket_path;
 mod state;
 mod supervisor;
 mod theme_loader;
