@@ -11,9 +11,9 @@
 //!    [`paths::find_icon_file`] (preferred theme, then Adwaita, hicolor).
 //!
 //! Cached rasterisations are keyed by `(input, target_w, target_h)` and
-//! evicted opportunistically (LRU 64).
+//! evicted by least recent use (64 entries, 4 MiB including source keys).
 
-use std::collections::HashMap;
+use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 
 use tiny_skia::{Pixmap, Transform};
@@ -23,6 +23,7 @@ use crate::paths;
 const MAX_INLINE_BYTES: usize = 256 * 1024;
 const MAX_ON_DISK_BYTES: u64 = 1024 * 1024;
 const CACHE_CAP: usize = 64;
+const CACHE_BYTES: usize = 4 * 1024 * 1024;
 
 /// Standard freedesktop icon name used for "missing icon" fallbacks. The
 /// resolver tries this name through the normal lookup chain (theme dir +
@@ -52,11 +53,29 @@ pub enum IconError {
     NotFound(String),
 }
 
+struct CacheEntry {
+    key: (String, u32, u32),
+    pixmap: Pixmap,
+    was_symbolic: bool,
+}
+
+impl CacheEntry {
+    fn bytes(&self) -> usize {
+        icon_bytes(&self.key, &self.pixmap)
+    }
+}
+
+fn icon_bytes(key: &(String, u32, u32), pixmap: &Pixmap) -> usize {
+    key.0
+        .capacity()
+        .saturating_add(pixmap.data().len())
+        .saturating_add(std::mem::size_of::<CacheEntry>())
+}
+
 #[derive(Default)]
 pub struct IconResolver {
-    cache: HashMap<(String, u32, u32), Pixmap>,
-    was_symbolic: HashMap<(String, u32, u32), bool>,
-    order: Vec<(String, u32, u32)>,
+    cache: VecDeque<CacheEntry>,
+    bytes: usize,
     theme_dir: Option<PathBuf>,
 }
 
@@ -66,16 +85,14 @@ impl IconResolver {
     }
 
     pub fn with_theme_dir(mut self, dir: Option<PathBuf>) -> Self {
-        self.theme_dir = dir;
+        self.set_theme_dir(dir);
         self
     }
 
     pub fn set_theme_dir(&mut self, dir: Option<PathBuf>) {
         if self.theme_dir != dir {
             self.theme_dir = dir;
-            self.cache.clear();
-            self.was_symbolic.clear();
-            self.order.clear();
+            self.clear_cache();
         }
     }
 
@@ -93,29 +110,50 @@ impl IconResolver {
         if src.is_empty() {
             return None;
         }
-        let key = (src.to_string(), w, h);
-        if let Some(p) = self.cache.get(&key) {
-            return Some((
-                p.clone(),
-                self.was_symbolic.get(&key).copied().unwrap_or(false),
-            ));
+        if let Some(index) = self
+            .cache
+            .iter()
+            .position(|entry| entry.key.0 == src && entry.key.1 == w && entry.key.2 == h)
+        {
+            let hit = self
+                .cache
+                .remove(index)
+                .expect("index came from this cache");
+            let result = (hit.pixmap.clone(), hit.was_symbolic);
+            self.cache.push_back(hit);
+            return Some(result);
         }
         let (pm, sym) = self.rasterise_with_meta(src, w, h).ok()?;
-        self.insert_cache(key.clone(), pm.clone(), sym);
+        let key = (src.to_owned(), w, h);
+        // An oversized raster still renders, but do not duplicate it just to
+        // discover that it cannot fit the retained cache.
+        if icon_bytes(&key, &pm) <= CACHE_BYTES {
+            self.insert_cache(key, pm.clone(), sym);
+        }
         Some((pm, sym))
     }
 
+    pub(crate) fn clear_cache(&mut self) {
+        self.cache = VecDeque::new();
+        self.bytes = 0;
+    }
+
     fn insert_cache(&mut self, key: (String, u32, u32), value: Pixmap, was_symbolic: bool) {
-        if self.cache.len() >= CACHE_CAP
-            && let Some(old) = self.order.first().cloned()
-        {
-            self.cache.remove(&old);
-            self.was_symbolic.remove(&old);
-            self.order.remove(0);
+        let bytes = icon_bytes(&key, &value);
+        if bytes > CACHE_BYTES {
+            return;
         }
-        self.cache.insert(key.clone(), value);
-        self.was_symbolic.insert(key.clone(), was_symbolic);
-        self.order.push(key);
+        while self.bytes + bytes > CACHE_BYTES || self.cache.len() >= CACHE_CAP {
+            if let Some(old) = self.cache.pop_front() {
+                self.bytes -= old.bytes();
+            }
+        }
+        self.bytes += bytes;
+        self.cache.push_back(CacheEntry {
+            key,
+            pixmap: value,
+            was_symbolic,
+        });
     }
 
     fn rasterise_with_meta(&self, src: &str, w: u32, h: u32) -> Result<(Pixmap, bool), IconError> {
@@ -425,5 +463,66 @@ mod tests {
             red_pixels > 100,
             "expected mostly red, got {red_pixels} red pixels"
         );
+    }
+
+    #[test]
+    fn icon_budget_counts_source_bytes_and_promotes_hits() {
+        let mut resolver = IconResolver::new();
+        for n in 0..CACHE_CAP {
+            resolver.insert_cache((format!("{n}"), 2, 2), Pixmap::new(2, 2).unwrap(), false);
+        }
+        resolver.resolve("0", 2, 2).unwrap();
+        resolver.insert_cache(("new".into(), 2, 2), Pixmap::new(2, 2).unwrap(), false);
+        assert!(resolver.cache.iter().any(|entry| entry.key.0 == "0"));
+        assert!(!resolver.cache.iter().any(|entry| entry.key.0 == "1"));
+        assert_eq!(resolver.cache.len(), CACHE_CAP);
+        resolver.clear_cache();
+        resolver.insert_cache(
+            ("x".repeat(CACHE_BYTES), 2, 2),
+            Pixmap::new(2, 2).unwrap(),
+            false,
+        );
+        assert!(
+            resolver.cache.is_empty(),
+            "large source keys must not bypass the byte budget"
+        );
+        for n in 0..20 {
+            resolver.insert_cache(
+                (format!("{n}"), 512, 512),
+                Pixmap::new(512, 512).unwrap(),
+                false,
+            );
+            assert!(resolver.bytes <= CACHE_BYTES);
+        }
+        assert!(resolver.cache.len() < 20);
+    }
+
+    #[test]
+    fn explicit_invalidation_refreshes_same_directory_icon() {
+        let dir = tempfile::tempdir().unwrap();
+        let icons = dir.path().join("icons");
+        std::fs::create_dir(&icons).unwrap();
+        let path = icons.join("custom.svg");
+        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" width="2" height="2"><rect width="2" height="2" fill="red"/></svg>"##;
+        std::fs::write(&path, svg).unwrap();
+        let mut resolver = IconResolver::new().with_theme_dir(Some(dir.path().to_path_buf()));
+        let red = resolver.resolve("custom", 2, 2).unwrap();
+        std::fs::write(&path, svg.replace("red", "blue")).unwrap();
+        resolver.set_theme_dir(Some(dir.path().to_path_buf()));
+        assert_eq!(resolver.resolve("custom", 2, 2).unwrap().data(), red.data());
+        resolver.clear_cache();
+        let blue = resolver.resolve("custom", 2, 2).unwrap();
+        assert_ne!(blue.data(), red.data());
+        assert_eq!(&blue.data()[..4], &[0, 0, 255, 255]);
+    }
+
+    #[test]
+    fn oversized_icon_renders_without_entering_cache() {
+        let mut resolver = IconResolver::new();
+        let src = r##"data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="1025" height="1024"><rect width="1025" height="1024" fill="red"/></svg>"##;
+        let pm = resolver.resolve(src, 1025, 1024).unwrap();
+        assert_eq!(&pm.data()[..4], &[255, 0, 0, 255]);
+        assert!(resolver.cache.is_empty());
+        assert_eq!(resolver.bytes, 0);
     }
 }

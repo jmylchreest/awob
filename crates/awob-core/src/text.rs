@@ -15,6 +15,12 @@ use tiny_skia::Pixmap;
 
 use crate::colour::Colour;
 
+// Reset after a completed draw, so a large run is never truncated. These bound
+// retained glyph images/outlines; they do not bound transient shaping/raster
+// allocations or FontSystem's internal font and shaping caches.
+const GLYPH_CACHE_BYTES: usize = 4 * 1024 * 1024;
+const GLYPH_CACHE_ENTRIES: usize = 4096;
+
 pub struct TextRenderer {
     pub font_system: FontSystem,
     pub swash_cache: SwashCache,
@@ -31,6 +37,35 @@ impl TextRenderer {
         Self {
             font_system: FontSystem::new(),
             swash_cache: SwashCache::new(),
+        }
+    }
+
+    pub(crate) fn clear_glyph_cache(&mut self) {
+        self.swash_cache = SwashCache::new();
+    }
+
+    fn trim_glyph_cache(&mut self) {
+        let images = &self.swash_cache.image_cache;
+        let outlines = &self.swash_cache.outline_command_cache;
+        let entries = images.len().saturating_add(outlines.len());
+        let image_bytes = images
+            .values()
+            .map(|image| {
+                std::mem::size_of::<(cosmic_text::CacheKey, Option<cosmic_text::SwashImage>)>()
+                    + image.as_ref().map_or(0, |image| image.data.capacity())
+            })
+            .sum::<usize>();
+        let outline_bytes = outlines
+            .values()
+            .map(|commands| {
+                std::mem::size_of::<(cosmic_text::CacheKey, Option<Box<[cosmic_text::Command]>>)>()
+                    + commands.as_deref().map_or(0, std::mem::size_of_val)
+            })
+            .sum::<usize>();
+        if entries > GLYPH_CACHE_ENTRIES
+            || image_bytes.saturating_add(outline_bytes) > GLYPH_CACHE_BYTES
+        {
+            self.clear_glyph_cache();
         }
     }
 
@@ -123,6 +158,7 @@ impl TextRenderer {
                 }
             },
         );
+        self.trim_glyph_cache();
     }
 
     pub(crate) fn shape(&mut self, text: &str, spec: &FontSpec) -> Buffer {
@@ -327,5 +363,79 @@ mod tests {
                 assert_eq!(actual.data(), expected.data(), "{label:?}, {font}");
             }
         }
+    }
+
+    fn cache_key(glyph: u16) -> cosmic_text::CacheKey {
+        cosmic_text::CacheKey::new(
+            Default::default(),
+            glyph,
+            14.0,
+            (0.0, 0.0),
+            Weight(400),
+            cosmic_text::CacheKeyFlags::empty(),
+        )
+        .0
+    }
+
+    #[test]
+    fn glyph_cache_limits_include_missing_glyphs_and_payload_bytes() {
+        let mut renderer = TextRenderer::new();
+        for glyph in 0..=GLYPH_CACHE_ENTRIES as u16 {
+            renderer
+                .swash_cache
+                .image_cache
+                .insert(cache_key(glyph), None);
+        }
+        renderer.trim_glyph_cache();
+        assert!(renderer.swash_cache.image_cache.is_empty());
+        let mut image = cosmic_text::SwashImage::new();
+        image.data = vec![0; GLYPH_CACHE_BYTES];
+        renderer
+            .swash_cache
+            .image_cache
+            .insert(cache_key(0), Some(image));
+        renderer.trim_glyph_cache();
+        assert!(renderer.swash_cache.image_cache.is_empty());
+
+        renderer.swash_cache.outline_command_cache.insert(
+            cache_key(0),
+            vec![
+                cosmic_text::Command::Close;
+                GLYPH_CACHE_BYTES / std::mem::size_of::<cosmic_text::Command>() + 1
+            ]
+            .into_boxed_slice()
+            .into(),
+        );
+        renderer.trim_glyph_cache();
+        assert!(renderer.swash_cache.outline_command_cache.is_empty());
+    }
+
+    #[test]
+    fn glyph_reset_preserves_fonts_and_drawn_pixels() {
+        let mut renderer = TextRenderer::new();
+        let spec = FontSpec::parse("sans-serif 14");
+        let mut expected = Pixmap::new(180, 50).unwrap();
+        renderer.draw(
+            &mut expected,
+            0.0,
+            0.0,
+            "Volume 75%",
+            &spec,
+            Colour::rgb(255, 255, 255),
+        );
+        let font_count = renderer.font_system.db().faces().count();
+        renderer.clear_glyph_cache();
+        assert!(renderer.swash_cache.image_cache.is_empty());
+        assert_eq!(renderer.font_system.db().faces().count(), font_count);
+        let mut actual = Pixmap::new(180, 50).unwrap();
+        renderer.draw(
+            &mut actual,
+            0.0,
+            0.0,
+            "Volume 75%",
+            &spec,
+            Colour::rgb(255, 255, 255),
+        );
+        assert_eq!(actual.data(), expected.data());
     }
 }

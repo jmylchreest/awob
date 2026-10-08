@@ -8,7 +8,7 @@
 //!
 //! e.g. `shadow="0 8 24 rgba(0,0,0,0.4)"`.
 
-use std::collections::HashMap;
+use std::collections::VecDeque;
 
 use crate::colour::Colour;
 
@@ -56,9 +56,16 @@ pub fn parse(s: &str) -> Option<ShadowSpec> {
 type MaskKey = (u32, u32, u32, u32);
 type MaskEntry = (u32, u32, Vec<u8>);
 
+// These budgets constrain retained masks, not the temporary allocation needed
+// to draw one large shadow. Input limits are a separate concern.
+const CACHE_BYTES: usize = 4 * 1024 * 1024;
+const CACHE_ENTRIES: usize = 64;
+
 #[derive(Default)]
 pub struct ShadowCache {
-    masks: HashMap<MaskKey, MaskEntry>,
+    masks: VecDeque<(MaskKey, MaskEntry)>,
+    bytes: usize,
+    transient: Option<MaskEntry>,
 }
 
 impl ShadowCache {
@@ -66,19 +73,57 @@ impl ShadowCache {
         Self::default()
     }
 
+    /// Borrow a mask, keeping at most 4 MiB / 64 entries in the LRU cache.
+    ///
+    /// A larger mask is held separately until [`Self::release_transient`] or
+    /// the next request. This keeps the borrowed API without rejecting or
+    /// changing geometry that was previously drawable.
     pub fn get_or_compute(&mut self, w: u32, h: u32, radius: u32, blur: u32) -> (u32, u32, &[u8]) {
-        // Belt-and-braces clamp: parse() already caps blur, but ShadowSpec
-        // has public fields and a misbehaving caller could feed us a huge
-        // value. Mask buffer is (w + 4·blur)² bytes, so this bounds the
-        // worst-case allocation even if the parser is bypassed.
+        self.release_transient();
         let blur = blur.min(MAX_BLUR_RADIUS as u32);
         let key = (w, h, radius, blur);
-        let entry = self
-            .masks
-            .entry(key)
-            .or_insert_with(|| compute_mask(w, h, radius, blur));
+        if let Some(index) = self.masks.iter().position(|(k, _)| *k == key) {
+            let hit = self
+                .masks
+                .remove(index)
+                .expect("index came from this cache");
+            self.masks.push_back(hit);
+        } else {
+            let mask = compute_mask(w, h, radius, blur);
+            let bytes = mask_bytes(&mask);
+            if bytes > CACHE_BYTES {
+                let entry = self.transient.insert(mask);
+                return (entry.0, entry.1, &entry.2);
+            }
+            while self.bytes + bytes > CACHE_BYTES || self.masks.len() >= CACHE_ENTRIES {
+                if let Some((_, old)) = self.masks.pop_front() {
+                    self.bytes -= mask_bytes(&old);
+                }
+            }
+            self.bytes += bytes;
+            self.masks.push_back((key, mask));
+        }
+        let entry = &self.masks.back().expect("mask was inserted or promoted").1;
         (entry.0, entry.1, &entry.2)
     }
+
+    /// Drop an oversized mask after its last use in the current draw.
+    pub fn release_transient(&mut self) {
+        self.transient = None;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn has_transient(&self) -> bool {
+        self.transient.is_some()
+    }
+
+    pub(crate) fn clear(&mut self) {
+        *self = Self::default();
+    }
+}
+
+fn mask_bytes(mask: &MaskEntry) -> usize {
+    mask.2.capacity() + std::mem::size_of::<(MaskKey, MaskEntry)>()
 }
 
 /// Padding around the rect inside the mask buffer. `blur_radius * 2` is
@@ -265,5 +310,50 @@ mod tests {
         let cx = (pad + 20) as usize;
         let cy = (pad + 20) as usize;
         assert_eq!(mask[cy * mw as usize + cx], 255);
+    }
+
+    #[test]
+    fn cache_budget_bounds_geometry_churn_and_promotes_hits() {
+        let mut cache = ShadowCache::new();
+        for width in 300..500 {
+            cache.get_or_compute(width, 64, 12, 24);
+            assert!(cache.bytes <= CACHE_BYTES);
+            assert!(cache.masks.len() <= CACHE_ENTRIES);
+        }
+        assert!(cache.masks.len() < 200);
+        let newest = cache.masks.back().unwrap().0;
+        let oldest = cache.masks.front().unwrap().0;
+        cache.get_or_compute(oldest.0, oldest.1, oldest.2, oldest.3);
+        assert_eq!(cache.masks.back().unwrap().0, oldest);
+        assert_ne!(oldest, newest);
+    }
+
+    #[test]
+    fn oversized_shadow_is_transient_and_pixels_are_unchanged() {
+        let mut cache = ShadowCache::new();
+        let expected = compute_mask(2100, 2100, 0, 0);
+        let (_, _, actual) = cache.get_or_compute(2100, 2100, 0, 0);
+        assert_eq!(actual, expected.2);
+        assert!(cache.masks.is_empty());
+        assert!(cache.transient.is_some());
+        cache.release_transient();
+        assert!(cache.transient.is_none());
+        assert_eq!(cache.bytes, 0);
+    }
+
+    #[test]
+    fn shadow_lru_evicts_cold_entry_and_recomputes_identical_pixels() {
+        let mut cache = ShadowCache::new();
+        let expected = cache.get_or_compute(2, 2, 0, 0).2.to_vec();
+        for width in 3..=CACHE_ENTRIES as u32 + 1 {
+            cache.get_or_compute(width, 2, 0, 0);
+        }
+        cache.get_or_compute(2, 2, 0, 0);
+        cache.get_or_compute(100, 2, 0, 0);
+        assert!(cache.masks.iter().any(|(key, _)| key.0 == 2));
+        assert!(!cache.masks.iter().any(|(key, _)| key.0 == 3));
+        cache.clear();
+        assert_eq!(cache.bytes, 0);
+        assert_eq!(cache.get_or_compute(2, 2, 0, 0).2, expected);
     }
 }
