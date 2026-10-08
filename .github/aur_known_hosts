@@ -1,0 +1,4 @@
+# Arch Linux infrastructure, verified 2026-10-08.
+# https://github.com/archlinux/infrastructure/blob/15f83e8f0ef32183b9dcc928ed4e0ac400aaf5a5/docs/ssh-known_hosts.txt
+# Rotate only after checking an independently published Arch Linux key.
+aur.archlinux.org ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEuBKrPzbawxA/k2g6NcyV5jmqwJ2s+zpgZGZ7tpLIcN

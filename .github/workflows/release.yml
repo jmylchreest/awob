@@ -370,12 +370,16 @@ jobs:
           set -euo pipefail
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
           printf '%s\n' "$AUR_KEY" > ~/.ssh/aur && chmod 600 ~/.ssh/aur
-          ssh-keyscan -t rsa,ed25519 aur.archlinux.org > ~/.ssh/known_hosts 2>/dev/null
+          cp .github/aur_known_hosts ~/.ssh/known_hosts
           cat > ~/.ssh/config <<'CONF'
           Host aur.archlinux.org
             User aur
             IdentityFile ~/.ssh/aur
             IdentitiesOnly yes
+            StrictHostKeyChecking yes
+            HostKeyAlgorithms ssh-ed25519
+            GlobalKnownHostsFile /dev/null
+            UpdateHostKeys no
           CONF
           chmod 600 ~/.ssh/config
 
@@ -404,6 +408,13 @@ jobs:
       - name: Publish ${{ matrix.pkgname }} to AUR
         if: matrix.pkgname != 'awob-git' || steps.changed.outputs.skip != 'true'
         uses: KSXGitHub/github-actions-deploy-aur@084b0d9b15415bf9cdb65d44dad1efe37a354050 # v4.2.0
+        # The Docker action scans keys into its own ~/.ssh/known_hosts. Git
+        # must ignore that file and use our independently verified pin.
+        env:
+          GIT_SSH_COMMAND: >-
+            ssh -o StrictHostKeyChecking=yes -o HostKeyAlgorithms=ssh-ed25519
+            -o UserKnownHostsFile=/github/workspace/.github/aur_known_hosts
+            -o GlobalKnownHostsFile=/dev/null -o UpdateHostKeys=no
         with:
           pkgname: ${{ matrix.pkgname }}
           pkgbuild: ./aur-staged/${{ matrix.pkgname }}/PKGBUILD
