@@ -255,7 +255,7 @@ primary  = NUMBER | STRING | '$' IDENT | IDENT '(' args? ')' | '(' expr ')'
 |---|---|
 | `icon(<event>)` | Default freedesktop icon name for an event (`"volume"` → `"audio-volume-high"`, `"battery"` → `"battery"`, …). |
 | `label(<event>)` | Default human label for an event (`"volume"` → `"Volume"`). |
-| `clamp(v, lo, hi)` | Clamp a number to `[lo, hi]`. |
+| `clamp(v, lo, hi)` | Clamp a number to `[lo, hi]`. Reversed or NaN bounds return an expression error; equal and infinite bounds are allowed. |
 | `lerp(a, b, t)` | Linear interpolation `a + (b - a) * t`. |
 | `min(a, b, …)` `max(a, b, …)` | Min/max of any number of arguments. |
 | `int(v)` | Truncate toward zero (drop fractional part). Use for percent readouts: `"{int($progress * 100)}%"`. |
