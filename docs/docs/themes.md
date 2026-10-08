@@ -86,6 +86,12 @@ scene {
 A send's `--timeout <ms>` overrides `show` for that one cycle. The
 total visible window is `fade-in + show + fade-out`.
 
+Fades and value transitions render at up to 60 fps; element animations render at
+up to 30 fps once the value transition finishes. Frames follow compositor
+callbacks, so an obscured or inactive surface may update less often. Durations
+still use elapsed time: throttling does not extend the display timeout. Static
+content is not redrawn until it changes or fade-out starts.
+
 ### `palette { … }`
 
 Named colours. Any CSS-syntax colour string parses (`#hex`, `#rgba`,
