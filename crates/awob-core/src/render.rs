@@ -518,7 +518,7 @@ impl Renderer {
                     blur_radius,
                     colour,
                 },
-            );
+            )?;
         }
         fill_rounded_rect(pm, rect.bb, rect.radius, rect.fill);
         if let Some((colour, width)) = rect.stroke {
