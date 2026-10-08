@@ -5,6 +5,10 @@
 //! tiny-skia [`Pixmap`] in a `wl_shm` buffer. The surface is unmapped after
 //! the theme's `timeout` until the next render.
 
+#[path = "pacing.rs"]
+mod pacing;
+use pacing::{ELEMENT_INTERVAL, Pacing};
+
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::{Duration, Instant};
 
@@ -17,7 +21,7 @@ use calloop::EventLoop;
 use calloop::channel::Event as CalloopEvent;
 use calloop_wayland_source::WaylandSource;
 use smithay_client_toolkit::{
-    compositor::{CompositorHandler, CompositorState},
+    compositor::{CompositorHandler, CompositorState, FrameCallbackData},
     delegate_registry,
     output::{OutputHandler, OutputState},
     registry::{ProvidesRegistryState, RegistryState},
@@ -29,7 +33,10 @@ use smithay_client_toolkit::{
             LayerSurface, LayerSurfaceConfigure,
         },
     },
-    shm::{Shm, ShmHandler, slot::SlotPool},
+    shm::{
+        Shm, ShmHandler,
+        slot::{Buffer, SlotPool},
+    },
 };
 use wayland_client::{
     Connection, QueueHandle,
@@ -177,6 +184,8 @@ fn run(cmd_rx: Receiver<SurfaceCommand>) -> Result<(), WaylandError> {
         shm,
         layer_shell,
         pool,
+        buffers: Vec::new(),
+        pacing: Pacing::default(),
         layer: None,
         configured: false,
         theme: None,
@@ -253,6 +262,9 @@ struct State {
     shm: Shm,
     layer_shell: LayerShell,
     pool: SlotPool,
+    // Keep at most three buffers, including old sizes still held by the compositor.
+    buffers: Vec<Buffer>,
+    pacing: Pacing,
     layer: Option<LayerSurface>,
     configured: bool,
     /// Re-rendered every animation frame from `theme` + interpolated
@@ -406,9 +418,7 @@ impl State {
         self.current_source = source;
         self.current_event = Some(event);
 
-        if self.configured {
-            self.draw();
-        }
+        self.pacing.request(now);
     }
 
     /// Hot-swap theme + palette on a visible OSD without restarting the
@@ -443,9 +453,7 @@ impl State {
             bindings.palette = theme.palette.clone();
         }
         self.theme = Some(theme);
-        if self.configured {
-            self.draw();
-        }
+        self.pacing.request(Instant::now());
     }
 
     /// Compute the bar's current interpolated value using the same formula
@@ -525,6 +533,7 @@ impl State {
         layer.commit();
         self.layer = Some(layer);
         self.configured = false;
+        self.pacing = Pacing::default();
     }
 
     fn update_layer(&mut self, surface: &ThemeSurface) {
@@ -542,9 +551,9 @@ impl State {
         }
     }
 
-    fn draw(&mut self) {
+    fn draw(&mut self) -> bool {
         if self.theme.is_none() || self.bindings.is_none() || self.layer.is_none() {
-            return;
+            return false;
         }
         let alpha = self.current_alpha();
 
@@ -575,6 +584,37 @@ impl State {
             None
         };
 
+        let width = self.surface_def.width.max(1) as i32;
+        let height = self.surface_def.height.max(1) as i32;
+        let stride = width * 4;
+        // A release makes storage reusable; it is never a request to render.
+        self.buffers.retain(|buffer| {
+            (buffer.height() == height && buffer.stride() == stride)
+                || buffer.canvas(&mut self.pool).is_none()
+        });
+        let index = self.buffers.iter().position(|buffer| {
+            buffer.height() == height
+                && buffer.stride() == stride
+                && buffer.canvas(&mut self.pool).is_some()
+        });
+        let index = if let Some(index) = index {
+            index
+        } else {
+            if self.buffers.len() >= 3 {
+                return false;
+            }
+            match self
+                .pool
+                .create_buffer(width, height, stride, wl_shm::Format::Argb8888)
+            {
+                Ok((buffer, _)) => self.buffers.push(buffer),
+                Err(e) => {
+                    tracing::warn!("shm buffer alloc failed: {e}");
+                    return false;
+                }
+            }
+            self.buffers.len() - 1
+        };
         let pm =
             match self
                 .renderer
@@ -583,59 +623,50 @@ impl State {
                 Ok(p) => p,
                 Err(e) => {
                     tracing::warn!("render: {e}");
-                    return;
+                    return false;
                 }
             };
-        let width = pm.width() as i32;
-        let height = pm.height() as i32;
-        let stride = width * 4;
-        let buffer_result =
-            self.pool
-                .create_buffer(width, height, stride, wl_shm::Format::Argb8888);
-        let (buffer, canvas) = match buffer_result {
-            Ok((b, c)) => (b, c),
-            Err(e) => {
-                tracing::warn!("shm buffer alloc failed: {e}");
-                return;
-            }
+        let buffer = &self.buffers[index];
+        let Some(canvas) = buffer.canvas(&mut self.pool) else {
+            return false;
         };
         argb_premul_with_alpha(pm.data(), canvas, alpha);
         let layer = self.layer.as_ref().unwrap();
         let wl_surface = layer.wl_surface();
         if let Err(e) = buffer.attach_to(wl_surface) {
             tracing::warn!("attach buffer failed: {e}");
-            return;
+            return false;
         }
         wl_surface.damage_buffer(0, 0, width, height);
+        wl_surface.frame(&self.qh, FrameCallbackData(wl_surface.clone()));
         wl_surface.commit();
+        true
     }
 
-    /// Returns how long until the next animation tick should fire. `None` = idle.
+    /// The cycle deadline remains live even while the compositor withholds frames.
     fn next_tick_timeout(&self) -> Option<Duration> {
-        match self.current_phase() {
-            Phase::FadeIn | Phase::FadeOut => Some(Duration::from_millis(16)),
-            Phase::Show => {
-                // 60Hz during the value transition window (fade_in + transition);
-                // 30Hz while element animations are still playing; otherwise sleep
-                // straight through to fade-out.
-                let elapsed = Instant::now().saturating_duration_since(self.sent_at);
-                let animation_window = self.surface_def.fade_in + self.transition_duration;
-                if elapsed < animation_window {
-                    Some(Duration::from_millis(16))
-                } else if self.has_active_element_animations() {
-                    // 30fps is plenty for transient OSDs and saves battery
-                    // on integrated GPUs.
-                    Some(Duration::from_millis(33))
-                } else {
-                    let start = self.cycle_start?;
-                    let elapsed_cycle = Instant::now().saturating_duration_since(start);
-                    let until_fade_out = (self.surface_def.fade_in + self.surface_def.show)
-                        .saturating_sub(elapsed_cycle);
-                    Some(until_fade_out)
-                }
-            }
-            Phase::Done => None,
-        }
+        let now = Instant::now();
+        let end = self.cycle_start?
+            + self.surface_def.fade_in
+            + self.surface_def.show
+            + self.surface_def.fade_out;
+        Some(self.pacing.timeout(now, end, self.configured))
+    }
+
+    fn next_frame(&self, now: Instant) -> Instant {
+        let start = self.cycle_start.unwrap_or(now);
+        let fade_in_end = start + self.surface_def.fade_in;
+        let show_end = fade_in_end + self.surface_def.show;
+        let end = show_end + self.surface_def.fade_out;
+        let transition_end = self.sent_at + self.surface_def.fade_in + self.transition_duration;
+        next_frame_deadline(
+            now,
+            fade_in_end,
+            show_end,
+            end,
+            transition_end,
+            self.has_active_element_animations(),
+        )
     }
 
     fn has_active_element_animations(&self) -> bool {
@@ -652,7 +683,7 @@ impl State {
     fn tick(&mut self) {
         match self.current_phase() {
             Phase::Done => {
-                if self.layer.is_some() {
+                if self.cycle_start.is_some() {
                     self.layer = None;
                     self.configured = false;
                     self.theme = None;
@@ -660,6 +691,7 @@ impl State {
                     self.cycle_start = None;
                     self.current_source = None;
                     self.current_event = None;
+                    self.pacing = Pacing::default();
                 }
                 // Drain a queued non-preempt send as a fresh OSD.
                 if let Some(p) = self.pending.take() {
@@ -676,11 +708,43 @@ impl State {
                 }
             }
             Phase::FadeIn | Phase::FadeOut | Phase::Show => {
-                if self.configured {
-                    self.draw();
+                let now = Instant::now();
+                if self.configured && self.pacing.ready(now) {
+                    if self.draw() {
+                        self.pacing.submitted(Instant::now(), self.next_frame(now));
+                    } else {
+                        self.pacing.retry(now);
+                    }
                 }
             }
         }
+    }
+}
+
+/// Preserve phase boundaries and the final transition value even when an animation
+/// ends between frames. Late wakeups use wall-clock time; they never catch up by
+/// submitting a burst of obsolete frames.
+fn next_frame_deadline(
+    now: Instant,
+    fade_in_end: Instant,
+    show_end: Instant,
+    end: Instant,
+    transition_end: Instant,
+    elements_animated: bool,
+) -> Instant {
+    const FRAME: Duration = Duration::from_nanos(1_000_000_000 / 60);
+    if now < fade_in_end {
+        (now + FRAME).min(fade_in_end)
+    } else if now < show_end {
+        if now < transition_end {
+            (now + FRAME).min(transition_end).min(show_end)
+        } else if elements_animated {
+            (now + ELEMENT_INTERVAL).min(show_end)
+        } else {
+            show_end
+        }
+    } else {
+        (now + FRAME).min(end)
     }
 }
 
@@ -771,7 +835,21 @@ impl CompositorHandler for State {
         _: wl_output::Transform,
     ) {
     }
-    fn frame(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_surface::WlSurface, _: u32) {}
+    fn frame(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        surface: &wl_surface::WlSurface,
+        _: u32,
+    ) {
+        if self
+            .layer
+            .as_ref()
+            .is_some_and(|layer| layer.wl_surface() == surface)
+        {
+            self.pacing.frame_done();
+        }
+    }
     fn surface_enter(
         &mut self,
         _: &Connection,
@@ -800,21 +878,31 @@ impl OutputHandler for State {
 }
 
 impl LayerShellHandler for State {
-    fn closed(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &LayerSurface) {
-        self.layer = None;
-        self.configured = false;
+    fn closed(&mut self, _: &Connection, _: &QueueHandle<Self>, layer: &LayerSurface) {
+        if self
+            .layer
+            .as_ref()
+            .is_some_and(|current| current.wl_surface() == layer.wl_surface())
+        {
+            self.layer = None;
+            self.configured = false;
+        }
     }
     fn configure(
         &mut self,
         _: &Connection,
         _: &QueueHandle<Self>,
-        _: &LayerSurface,
+        layer: &LayerSurface,
         _configure: LayerSurfaceConfigure,
         _serial: u32,
     ) {
-        self.configured = true;
-        if self.theme.is_some() && self.bindings.is_some() {
-            self.draw();
+        if self
+            .layer
+            .as_ref()
+            .is_some_and(|current| current.wl_surface() == layer.wl_surface())
+        {
+            self.configured = true;
+            self.pacing.request(Instant::now());
         }
     }
 }
@@ -834,3 +922,67 @@ impl ProvidesRegistryState for State {
 
 delegate_registry!(State);
 smithay_client_toolkit::delegate_dispatch2!(State);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn static_show_sleeps_until_fade_out() {
+        let start = Instant::now();
+        let fade = start + Duration::from_millis(100);
+        let show = fade + Duration::from_secs(3);
+        let end = show + Duration::from_millis(100);
+        assert_eq!(
+            next_frame_deadline(
+                fade + Duration::from_secs(1),
+                fade,
+                show,
+                end,
+                fade + Duration::from_millis(180),
+                false
+            ),
+            show
+        );
+    }
+
+    #[test]
+    fn transition_and_phase_endpoints_are_not_skipped() {
+        let start = Instant::now();
+        let fade = start + Duration::from_millis(100);
+        let transition = fade + Duration::from_millis(180);
+        let show = fade + Duration::from_secs(3);
+        let end = show + Duration::from_millis(100);
+        for boundary in [fade, transition, show, end] {
+            let now = boundary - Duration::from_millis(1);
+            assert_eq!(
+                next_frame_deadline(now, fade, show, end, transition, false),
+                boundary
+            );
+        }
+    }
+
+    #[test]
+    fn zero_durations_finish_without_division_or_extra_frames() {
+        let start = Instant::now();
+        assert_eq!(
+            next_frame_deadline(start, start, start, start, start, false),
+            start
+        );
+        let show = start + Duration::from_secs(3);
+        assert_eq!(
+            next_frame_deadline(start, start, show, show, start, false),
+            show
+        );
+    }
+
+    #[test]
+    fn elements_use_thirty_hz_after_value_transition() {
+        let now = Instant::now();
+        let end = now + Duration::from_secs(3);
+        assert_eq!(
+            next_frame_deadline(now, now, end, end, now, true),
+            now + ELEMENT_INTERVAL
+        );
+    }
+}
