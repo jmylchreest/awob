@@ -489,7 +489,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         tracing::info!("running headless (--no-surface): no Wayland surface will be opened");
         None
     } else {
-        match wayland::spawn() {
+        match wayland::spawn(initial.theme.clone()) {
             Ok((handle, _join)) => {
                 tracing::info!("wayland surface thread started");
                 Some(handle)
