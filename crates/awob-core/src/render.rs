@@ -1102,7 +1102,7 @@ scene {
         b.set("app", Value::String("long label ".repeat(60)));
         let mut renderer = Renderer::new();
         let first = renderer.render(&theme, &b, None).unwrap();
-        assert!(first.data().chunks_exact(4).any(|px| px[3] > 0));
+        assert!(first.data().as_chunks::<4>().0.iter().any(|px| px[3] > 0));
         let repeated = renderer.render_cached(&theme, &b, None).unwrap();
         assert_eq!(repeated.data(), first.data());
         assert_eq!(renderer.layouts.len(), 0);
