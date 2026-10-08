@@ -10,8 +10,8 @@ name: CI
 on:
   push:
     branches: [main]
+  # Include stacked PRs whose base is another review branch.
   pull_request:
-    branches: [main]
 
 permissions: {}
 
