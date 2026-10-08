@@ -16,7 +16,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use awob_core::{Theme, ThemeError, parse_theme, parse_theme_with_base};
+use awob_core::{Theme, ThemeError, theme::LoadBudget};
 
 pub const EMBEDDED_DEFAULT_NAME: &str = "default";
 
@@ -71,14 +71,14 @@ pub fn load(
     name: &str,
     force_palette: Option<&Path>,
 ) -> Result<LoadedTheme, LoadError> {
+    let mut budget = LoadBudget::default();
     let on_disk = themes_roots.iter().find_map(|root| {
         let dir = root.join(name);
         dir.join("scene.kdl").exists().then_some(dir)
     });
     let mut loaded = if let Some(dir) = on_disk {
         let scene = dir.join("scene.kdl");
-        let kdl = std::fs::read_to_string(&scene)?;
-        let theme = parse_theme_with_base(&kdl, Some(&dir))?;
+        let theme = budget.load(&scene)?;
         let scene_abs = std::fs::canonicalize(&scene).unwrap_or(scene);
         LoadedTheme {
             name: name.into(),
@@ -87,13 +87,13 @@ pub fn load(
             scene_path: Some(scene_abs),
         }
     } else if name == EMBEDDED_DEFAULT_NAME {
-        load_embedded()?
+        load_embedded_with_budget(&mut budget)?
     } else {
         return Err(LoadError::NotFound(name.to_string()));
     };
 
     if let Some(overlay_path) = force_palette {
-        apply_force_palette(Arc::make_mut(&mut loaded.theme), overlay_path)?;
+        apply_force_palette(Arc::make_mut(&mut loaded.theme), overlay_path, &mut budget)?;
     }
     Ok(loaded)
 }
@@ -101,7 +101,11 @@ pub fn load(
 /// Load the embedded fallback theme. Used at cold start when the
 /// configured theme can't be loaded.
 pub fn load_embedded() -> Result<LoadedTheme, LoadError> {
-    let theme = parse_theme(EMBEDDED_DEFAULT_SCENE)?;
+    load_embedded_with_budget(&mut LoadBudget::default())
+}
+
+fn load_embedded_with_budget(budget: &mut LoadBudget) -> Result<LoadedTheme, LoadError> {
+    let theme = budget.parse(EMBEDDED_DEFAULT_SCENE, None)?;
     Ok(LoadedTheme {
         name: EMBEDDED_DEFAULT_NAME.into(),
         theme: Arc::new(theme),
@@ -113,13 +117,12 @@ pub fn load_embedded() -> Result<LoadedTheme, LoadError> {
 /// Merge an overlay's palette + styles into `theme` last-wins-by-key
 /// and append its path to `imported_files`. Existing style names are
 /// replaced outright; new names are appended.
-fn apply_force_palette(theme: &mut Theme, overlay_path: &Path) -> Result<(), LoadError> {
-    let content = std::fs::read_to_string(overlay_path)?;
-    // Use parse_theme_with_base so the overlay can itself `import`
-    // further palettes if a user wants to compose. Base dir is the
-    // overlay's own parent so relative imports resolve sensibly.
-    let base = overlay_path.parent();
-    let overlay = parse_theme_with_base(&content, base)?;
+fn apply_force_palette(
+    theme: &mut Theme,
+    overlay_path: &Path,
+    budget: &mut LoadBudget,
+) -> Result<(), LoadError> {
+    let overlay = budget.load(overlay_path)?;
     theme.palette.extend(overlay.palette);
     for s in overlay.styles {
         if let Some(pos) = theme.styles.iter().position(|x| x.name == s.name) {
@@ -188,5 +191,39 @@ mod tests {
         let t = load(&roots, "mytheme", None).unwrap();
         assert_eq!(t.theme.surface.width, 200);
         std::fs::remove_dir_all(&tmp).unwrap();
+    }
+    #[test]
+    fn palette_overlay_shares_root_and_import_byte_budget() {
+        let dir =
+            std::env::temp_dir().join(format!("awob-theme-overlay-budget-{}", std::process::id()));
+        let theme_dir = dir.join("budget");
+        std::fs::create_dir_all(&theme_dir).unwrap();
+        let size = 1024 * 1024;
+        let padded = |mut source: String| {
+            source.extend(std::iter::repeat_n(' ', size - source.len()));
+            source
+        };
+        std::fs::write(
+            theme_dir.join("scene.kdl"),
+            padded("import \"a.kdl\"\nimport \"b.kdl\"\nscene {}\n".into()),
+        )
+        .unwrap();
+        for file in ["a.kdl", "b.kdl"] {
+            std::fs::write(theme_dir.join(file), padded("palette {}\n".into())).unwrap();
+        }
+        let overlay = dir.join("overlay.kdl");
+        std::fs::write(&overlay, padded("palette {}\n".into())).unwrap();
+        assert!(load(std::slice::from_ref(&dir), "budget", Some(&overlay)).is_ok());
+        std::fs::write(
+            &overlay,
+            padded("import \"extra.kdl\"\npalette {}\n".into()),
+        )
+        .unwrap();
+        std::fs::write(dir.join("extra.kdl"), "palette {}\n").unwrap();
+        assert!(matches!(
+            load(std::slice::from_ref(&dir), "budget", Some(&overlay)),
+            Err(LoadError::Parse(ThemeError::InputLimit(_)))
+        ));
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

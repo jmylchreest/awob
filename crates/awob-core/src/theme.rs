@@ -31,8 +31,68 @@ pub struct Theme {
     pub imported_files: Vec<PathBuf>,
 }
 
+mod input;
+
+/// One theme and its optional palette overlay share a resource budget.
+///
+/// ```
+/// let mut load = awob_core::theme::LoadBudget::default();
+/// let theme = load.parse("scene {}", None).unwrap();
+/// assert!(theme.scene.elements.is_empty());
+/// ```
+#[derive(Default)]
+pub struct LoadBudget {
+    bytes: usize,
+    imports: usize,
+    syntax_nodes: usize,
+    parsed_nodes: usize,
+}
+
+impl LoadBudget {
+    /// Parse a source while retaining the budget for subsequent overlay loads.
+    pub fn parse(&mut self, src: &str, base: Option<&Path>) -> Result<Theme, ThemeError> {
+        let mut acc = ThemeAccumulator::default();
+        let mut seen = HashSet::new();
+        parse_into(src, base, &mut seen, &mut acc, self, 0)?;
+        acc.into_theme()
+    }
+
+    /// Load a regular UTF-8 file with a bounded read and parse its relative imports.
+    pub fn load(&mut self, path: &Path) -> Result<Theme, ThemeError> {
+        let src = input::read(path)?;
+        self.parse(&src, path.parent())
+    }
+
+    fn document(&mut self, src: &str) -> Result<KdlDocument, ThemeError> {
+        self.bytes = self
+            .bytes
+            .checked_add(src.len())
+            .ok_or(ThemeError::InputLimit("source bytes overflow"))?;
+        if self.bytes > input::TOTAL_BYTES {
+            return Err(ThemeError::InputLimit("load exceeds 4 MiB"));
+        }
+        let (source, nodes) = input::preflight(src)?;
+        self.syntax_nodes += nodes;
+        if self.syntax_nodes > input::MAX_NODES {
+            return Err(ThemeError::InputLimit("node count exceeds 10000"));
+        }
+        let doc = source.parse::<KdlDocument>()?;
+        let mut stack = vec![&doc];
+        while let Some(document) = stack.pop() {
+            self.parsed_nodes += document.nodes().len();
+            if self.parsed_nodes > input::MAX_NODES {
+                return Err(ThemeError::InputLimit("node count exceeds 10000"));
+            }
+            stack.extend(document.nodes().iter().filter_map(KdlNode::children));
+        }
+        Ok(doc)
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum ThemeError {
+    #[error("theme input limit: {0}")]
+    InputLimit(&'static str),
     #[error("surface: {0}")]
     Surface(#[from] crate::limits::RasterLimit),
     #[error("kdl parse: {0}")]
@@ -74,10 +134,7 @@ pub fn parse(src: &str) -> Result<Theme, ThemeError> {
 /// `base_dir`. Imported files are read from disk and their top-level blocks
 /// merged into the result. Cycles are rejected.
 pub fn parse_with_base(src: &str, base_dir: Option<&Path>) -> Result<Theme, ThemeError> {
-    let mut acc = ThemeAccumulator::default();
-    let mut seen: HashSet<PathBuf> = HashSet::new();
-    parse_into(src, base_dir, &mut seen, &mut acc)?;
-    acc.into_theme()
+    LoadBudget::default().parse(src, base_dir)
 }
 
 #[derive(Default)]
@@ -109,8 +166,13 @@ fn parse_into(
     base_dir: Option<&Path>,
     seen: &mut HashSet<PathBuf>,
     acc: &mut ThemeAccumulator,
+    budget: &mut LoadBudget,
+    depth: usize,
 ) -> Result<(), ThemeError> {
-    let doc: KdlDocument = src.parse::<KdlDocument>()?;
+    if depth > input::IMPORT_DEPTH {
+        return Err(ThemeError::InputLimit("import depth exceeds 16"));
+    }
+    let doc = budget.document(src)?;
     for node in doc.nodes() {
         match node.name().value() {
             "import" => {
@@ -127,13 +189,24 @@ fn parse_into(
                 if !seen.insert(abs.clone()) {
                     return Err(ThemeError::CircularImport(abs.display().to_string()));
                 }
-                let content = std::fs::read_to_string(&abs).map_err(|e| ThemeError::Import {
-                    path: abs.display().to_string(),
-                    source: e,
-                })?;
+                budget.imports += 1;
+                if budget.imports > input::MAX_IMPORTS {
+                    return Err(ThemeError::InputLimit("imports exceed 64"));
+                }
+                if depth >= input::IMPORT_DEPTH {
+                    return Err(ThemeError::InputLimit("import depth exceeds 16"));
+                }
+                let content = input::read(&abs)?;
                 acc.imported_files.push(abs.clone());
                 let imported_base = abs.parent().map(|p| p.to_path_buf());
-                parse_into(&content, imported_base.as_deref(), seen, acc)?;
+                parse_into(
+                    &content,
+                    imported_base.as_deref(),
+                    seen,
+                    acc,
+                    budget,
+                    depth + 1,
+                )?;
             }
             "surface" => parse_surface(node, &mut acc.surface, &mut acc.warnings)?,
             "palette" => parse_palette(node, &mut acc.palette)?,
@@ -809,5 +882,70 @@ scene {
             );
         }
         assert!(parse("surface { width 3840; height 2160; }; scene {}").is_ok());
+    }
+    #[test]
+    fn security_theme_source_byte_limit() {
+        let oversized = format!("{}scene {{}}", " ".repeat(1024 * 1024));
+        assert!(parse(&oversized).is_err());
+    }
+
+    #[test]
+    fn theme_load_budget_is_shared_and_allows_exact_byte_limit() {
+        let source = " ".repeat(input::FILE_BYTES);
+        let mut budget = LoadBudget::default();
+        for _ in 0..4 {
+            budget.parse(&source, None).unwrap();
+        }
+        assert!(budget.parse(" ", None).is_err());
+        assert!(LoadBudget::default().parse(&source, None).is_ok());
+    }
+
+    #[test]
+    fn theme_load_budget_counts_nodes_across_documents() {
+        let source = "scene {}\n".repeat(input::MAX_NODES / 2);
+        let mut budget = LoadBudget::default();
+        budget.parse(&source, None).unwrap();
+        budget.parse(&source, None).unwrap();
+        assert!(budget.parse("scene {}", None).is_err());
+    }
+
+    #[test]
+    fn theme_import_limits_allow_boundaries() {
+        let dir =
+            std::env::temp_dir().join(format!("awob-theme-import-budget-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut source = String::new();
+        for n in 0..=input::MAX_IMPORTS {
+            std::fs::write(dir.join(format!("{n}.kdl")), "scene {}").unwrap();
+            if n < input::MAX_IMPORTS {
+                source.push_str(&format!("import \"{n}.kdl\"\n"));
+            }
+        }
+        assert_eq!(
+            parse_with_base(&source, Some(&dir))
+                .unwrap()
+                .imported_files
+                .len(),
+            64
+        );
+        source.push_str("import \"64.kdl\"\n");
+        assert!(matches!(
+            parse_with_base(&source, Some(&dir)),
+            Err(ThemeError::InputLimit(_))
+        ));
+        for n in 0..input::IMPORT_DEPTH {
+            std::fs::write(
+                dir.join(format!("{n}.kdl")),
+                format!("import \"{}.kdl\"\n", n + 1),
+            )
+            .unwrap();
+        }
+        assert!(LoadBudget::default().load(&dir.join("0.kdl")).is_ok());
+        std::fs::write(dir.join("16.kdl"), "import \"17.kdl\"\n").unwrap();
+        assert!(matches!(
+            LoadBudget::default().load(&dir.join("0.kdl")),
+            Err(ThemeError::InputLimit(_))
+        ));
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }
