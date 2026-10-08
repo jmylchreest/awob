@@ -1,6 +1,7 @@
 mod config;
 mod ipc;
 mod known_listeners;
+mod requests;
 mod state;
 mod supervisor;
 mod theme_loader;
@@ -14,8 +15,11 @@ use std::thread;
 use std::time::Instant;
 
 use awob_core::apply_style;
-use awob_protocol::{HistoryEntry, PROTOCOL_VERSION, Request, Response};
+#[cfg(test)]
+use awob_protocol::Request;
+use awob_protocol::{HistoryEntry, PROTOCOL_VERSION, Response};
 use clap::Parser;
+use requests::{Requests, ThemeChange, ThemeChangeError};
 
 #[derive(Parser, Debug)]
 #[command(version, about = "awob — wayland overlay bar daemon")]
@@ -82,187 +86,99 @@ impl Shared {
 }
 
 impl Shared {
-    fn handle(&mut self, req: Request) -> Response {
-        match req {
-            Request::Hello { protocol } => Response::Hello {
-                protocol: PROTOCOL_VERSION,
-                daemon_version: env!("CARGO_PKG_VERSION").into(),
-            }
-            .with_protocol_check(protocol),
-            Request::Send(payload) => {
-                let prev = payload
-                    .source
-                    .as_deref()
-                    .and_then(|s| self.history.get(s, &payload.event))
-                    .cloned();
-                let last_value = prev.as_ref().map(|e| e.last_value);
-                let last_max = prev.as_ref().map(|e| e.last_max);
-                let last_seen = prev
-                    .as_ref()
-                    .map(|e| Instant::now().duration_since(e.last_seen));
-                let mut bindings =
-                    awob_core::bindings::build(&payload, last_value, last_max, last_seen);
-                bindings.palette = self.theme.theme.palette.clone();
-                // value > max forces `overflow` regardless of payload.style.
-                // Themes without an `overflow` block silently no-op.
-                let style_to_apply: &str = if payload.value > payload.max {
-                    "overflow"
-                } else {
-                    payload.style.as_deref().unwrap_or("normal")
-                };
-                let _ = apply_style(&self.theme.theme, &mut bindings, style_to_apply);
-                if let Some(accent_override) = &payload.accent {
-                    bindings.set("accent", awob_core::Value::String(accent_override.clone()));
-                }
-                let summary = format!(
-                    "send: event={} value={} max={} src={:?} style={:?} app={:?} icon={:?} \
-                     last_value={:?} last_max={:?}",
-                    payload.event,
-                    payload.value,
-                    payload.max,
-                    payload.source,
-                    payload.style,
-                    payload.app,
-                    payload.icon,
-                    last_value,
-                    last_max,
-                );
-                tracing::debug!("{summary}");
-                if let Some(handle) = &self.surface {
-                    let theme = Arc::clone(&self.theme.theme);
-                    let show_override = payload
-                        .timeout_ms
-                        .map(|ms| std::time::Duration::from_millis(u64::from(ms)));
-                    let last_value_for_anim = last_value.unwrap_or(payload.value);
-                    let transition = theme.surface.transition;
-                    let theme_dir = self.theme.source_dir.clone();
-                    if let Err(error) = handle.render(
-                        theme,
-                        bindings,
-                        last_value_for_anim,
-                        transition,
-                        theme_dir,
-                        payload.source.clone(),
-                        payload.event.clone(),
-                        payload.preempt,
-                        show_override,
-                    ) {
-                        return Response::Error {
-                            message: error.to_string(),
-                        };
-                    }
-                }
-                if let Some(src) = payload.source.as_deref() {
-                    let outcome = self.history.record(
-                        src,
-                        payload.listener_id.as_deref(),
-                        &payload.event,
-                        payload.value,
-                        payload.max,
-                    );
-                    if let Some(dup) = outcome.duplicate_listener {
-                        tracing::warn!(
-                            "duplicate listener `{}` — multiple instances active: [{}]",
-                            dup.listener_id,
-                            dup.sources.join(", "),
-                        );
-                    }
-                }
-                Response::Ok
-            }
-            Request::Query { source } => {
-                // One source may have multiple events; filter at iterate time.
-                let mut entries = Vec::new();
-                for (src, _evt, e) in self.history.entries() {
-                    if let Some(filter) = source.as_deref()
-                        && src != filter
-                    {
-                        continue;
-                    }
-                    entries.push(history_entry(src, e));
-                }
-                Response::Query { entries }
-            }
-            Request::SetTheme { name, persist } => {
-                match theme_loader::load(&self.themes_roots, &name, self.force_palette.as_deref()) {
-                    Ok(t) => {
-                        if let Err(error) = self.publish_theme(t) {
-                            return Response::Error {
-                                message: error.to_string(),
-                            };
-                        }
-                        if persist {
-                            if let Some(path) = &self.config_path {
-                                if let Err(e) = persist_theme_to_config(path, &name) {
-                                    // Non-fatal: theme is live, just not persisted.
-                                    return Response::Error {
-                                        message: format!(
-                                            "theme set in memory but persisting to {}: {e}",
-                                            path.display()
-                                        ),
-                                    };
-                                }
-                            } else {
-                                return Response::Error {
-                                    message: "theme set in memory but no awob.toml \
-                                              path is configured to persist to"
-                                        .into(),
-                                };
-                            }
-                        }
-                        Response::Ok
-                    }
-                    Err(e) => Response::Error {
-                        message: format!("set theme: {e}"),
-                    },
-                }
-            }
-            Request::Reload => {
-                let name = self.theme.name.clone();
-                match theme_loader::load(&self.themes_roots, &name, self.force_palette.as_deref()) {
-                    Ok(t) => {
-                        if let Err(error) = self.publish_theme(t) {
-                            return Response::Error {
-                                message: error.to_string(),
-                            };
-                        }
-                        Response::Ok
-                    }
-                    Err(e) => Response::Error {
-                        message: format!("reload: {e}"),
-                    },
-                }
-            }
-            Request::ThemeList => Response::ThemeList {
-                themes: enumerate_themes(&self.themes_roots, &self.theme.name),
-            },
-            Request::SetForcePalette { path } => {
-                // Update the in-memory force_palette and immediately
-                // reload the active theme so the overlay applies (or
-                // is removed). Then push the result to the wayland
-                // thread for instant redraw of any visible OSD.
-                let force_palette = path.map(std::path::PathBuf::from);
-                let name = self.theme.name.clone();
-                match theme_loader::load(&self.themes_roots, &name, force_palette.as_deref()) {
-                    Ok(t) => {
-                        if let Err(error) = self.publish_theme(t) {
-                            return Response::Error {
-                                message: error.to_string(),
-                            };
-                        }
-                        self.force_palette = force_palette;
-                        Response::Ok
-                    }
-                    Err(e) => Response::Error {
-                        message: format!("set force-palette: {e}"),
-                    },
-                }
-            }
-            Request::Version => Response::Version {
-                daemon_version: env!("CARGO_PKG_VERSION").into(),
-                protocol: PROTOCOL_VERSION,
-            },
+    fn send(&mut self, payload: awob_protocol::SendPayload) -> Response {
+        let prev = payload
+            .source
+            .as_deref()
+            .and_then(|s| self.history.get(s, &payload.event))
+            .cloned();
+        let last_value = prev.as_ref().map(|e| e.last_value);
+        let last_max = prev.as_ref().map(|e| e.last_max);
+        let last_seen = prev
+            .as_ref()
+            .map(|e| Instant::now().duration_since(e.last_seen));
+        let mut bindings = awob_core::bindings::build(&payload, last_value, last_max, last_seen);
+        bindings.palette = self.theme.theme.palette.clone();
+        // value > max forces `overflow` regardless of payload.style.
+        // Themes without an `overflow` block silently no-op.
+        let style_to_apply: &str = if payload.value > payload.max {
+            "overflow"
+        } else {
+            payload.style.as_deref().unwrap_or("normal")
+        };
+        let _ = apply_style(&self.theme.theme, &mut bindings, style_to_apply);
+        if let Some(accent_override) = &payload.accent {
+            bindings.set("accent", awob_core::Value::String(accent_override.clone()));
         }
+        let summary = format!(
+            "send: event={} value={} max={} src={:?} style={:?} app={:?} icon={:?} \
+             last_value={:?} last_max={:?}",
+            payload.event,
+            payload.value,
+            payload.max,
+            payload.source,
+            payload.style,
+            payload.app,
+            payload.icon,
+            last_value,
+            last_max,
+        );
+        tracing::debug!("{summary}");
+        if let Some(handle) = &self.surface {
+            let theme = Arc::clone(&self.theme.theme);
+            let show_override = payload
+                .timeout_ms
+                .map(|ms| std::time::Duration::from_millis(u64::from(ms)));
+            let last_value_for_anim = last_value.unwrap_or(payload.value);
+            let transition = theme.surface.transition;
+            let theme_dir = self.theme.source_dir.clone();
+            if let Err(error) = handle.render(
+                theme,
+                bindings,
+                last_value_for_anim,
+                transition,
+                theme_dir,
+                payload.source.clone(),
+                payload.event.clone(),
+                payload.preempt,
+                show_override,
+            ) {
+                return Response::Error {
+                    message: error.to_string(),
+                };
+            }
+        }
+        if let Some(src) = payload.source.as_deref() {
+            let outcome = self.history.record(
+                src,
+                payload.listener_id.as_deref(),
+                &payload.event,
+                payload.value,
+                payload.max,
+            );
+            if let Some(dup) = outcome.duplicate_listener {
+                tracing::warn!(
+                    "duplicate listener `{}` — multiple instances active: [{}]",
+                    dup.listener_id,
+                    dup.sources.join(", "),
+                );
+            }
+        }
+        Response::Ok
+    }
+
+    fn query(&mut self, source: Option<String>) -> Response {
+        // One source may have multiple events; filter at iterate time.
+        let mut entries = Vec::new();
+        for (src, _evt, e) in self.history.entries() {
+            if let Some(filter) = source.as_deref()
+                && src != filter
+            {
+                continue;
+            }
+            entries.push(history_entry(src, e));
+        }
+        Response::Query { entries }
     }
 }
 
@@ -606,7 +522,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         .clone()
         .or_else(awob_core::paths::awob_config_file);
 
-    let shared = Arc::new(Mutex::new(Shared {
+    let shared = Arc::new(Requests::new(Shared {
         history: state::History::new(),
         theme: initial,
         themes_roots,
@@ -616,7 +532,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         force_palette,
     }));
     {
-        let mut s = lock_or_recover(&shared, "shared(init)");
+        let mut s = lock_or_recover(&shared.shared, "shared(init)");
         s.rewatch();
         tracing::info!(
             "watching: {} paths for hot reload",
@@ -637,28 +553,13 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                         break;
                     }
                 }
-                let mut s = lock_or_recover(&shared, "shared(reload)");
-                let name = s.theme.name.clone();
-                let roots = s.themes_roots.clone();
-                let force_palette = s.force_palette.clone();
-                match theme_loader::load(&roots, &name, force_palette.as_deref()) {
-                    Ok(t) => {
-                        if let Err(error) = s.publish_theme(t) {
-                            if error == wayland::SurfaceSendError::Busy {
-                                // Retry through the debounce window, after releasing shared state.
-                                // A full render queue must not lose the final save notification.
-                                let _ = reload_tx.send(());
-                            } else {
-                                tracing::warn!("hot reload not applied: {error}");
-                            }
-                            continue;
-                        }
-                        tracing::info!(
-                            "hot-reloaded theme `{name}` ({} watched files)",
-                            s.theme.watch_paths().len()
-                        );
+                match shared.change_theme(ThemeChange::Reload) {
+                    Ok(watched) => tracing::info!("hot-reloaded theme ({watched} watched files)"),
+                    Err(ThemeChangeError::Surface(wayland::SurfaceSendError::Busy)) => {
+                        // Retry after debounce, keeping the previous theme until admission succeeds.
+                        let _ = reload_tx.send(());
                     }
-                    Err(e) => tracing::info!("hot reload failed: {e}"),
+                    Err(error) => tracing::info!("hot reload failed: {error}"),
                 }
             }
         });
@@ -711,9 +612,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         };
         let shared = Arc::clone(&shared);
         thread::spawn(move || {
-            let _ = ipc::serve_connection(stream, move |req| {
-                lock_or_recover(&shared, "shared(handle)").handle(req)
-            });
+            let _ = ipc::serve_connection(stream, move |req| shared.handle(req));
         });
     }
 
@@ -828,8 +727,8 @@ mod surface_admission_tests {
     use super::*;
     use awob_protocol::SendPayload;
 
-    fn shared(surface: Option<wayland::SurfaceHandle>) -> Shared {
-        Shared {
+    fn requests(surface: Option<wayland::SurfaceHandle>) -> Requests {
+        Requests::new(Shared {
             history: state::History::new(),
             theme: theme_loader::load_embedded().unwrap(),
             themes_roots: Vec::new(),
@@ -837,13 +736,11 @@ mod surface_admission_tests {
             watcher: None,
             config_path: None,
             force_palette: None,
-        }
+        })
     }
 
-    #[test]
-    fn rejected_send_does_not_change_history() {
-        let (surface, receiver) = wayland::SurfaceHandle::channel();
-        let mut state = shared(Some(surface));
+    fn fill(requests: &Requests) {
+        let state = requests.shared.lock().unwrap();
         for _ in 0..64 {
             state
                 .surface
@@ -852,17 +749,42 @@ mod surface_admission_tests {
                 .retheme(state.theme.theme.clone(), None)
                 .unwrap();
         }
+    }
+
+    #[test]
+    fn rejected_send_does_not_change_history() {
+        let (surface, receiver) = wayland::SurfaceHandle::channel();
+        let requests = requests(Some(surface));
+        fill(&requests);
         let mut payload = SendPayload::new("volume", 75.0);
         payload.source = Some("probe".into());
         assert!(matches!(
-            state.handle(Request::Send(payload.clone())),
+            requests.handle(Request::Send(payload.clone())),
             Response::Error { .. }
         ));
-        assert!(state.history.get("probe", "volume").is_none());
+        assert!(
+            requests
+                .shared
+                .lock()
+                .unwrap()
+                .history
+                .get("probe", "volume")
+                .is_none()
+        );
         receiver.try_recv().unwrap();
-        assert!(matches!(state.handle(Request::Send(payload)), Response::Ok));
+        assert!(matches!(
+            requests.handle(Request::Send(payload)),
+            Response::Ok
+        ));
         assert_eq!(
-            state.history.get("probe", "volume").unwrap().last_value,
+            requests
+                .shared
+                .lock()
+                .unwrap()
+                .history
+                .get("probe", "volume")
+                .unwrap()
+                .last_value,
             75.0
         );
     }
@@ -870,75 +792,296 @@ mod surface_admission_tests {
     #[test]
     fn rejected_reload_does_not_publish_a_new_theme() {
         let (surface, _receiver) = wayland::SurfaceHandle::channel();
-        let mut state = shared(Some(surface));
-        for _ in 0..64 {
-            state
-                .surface
-                .as_ref()
-                .unwrap()
-                .retheme(state.theme.theme.clone(), None)
-                .unwrap();
-        }
-        let original = state.theme.theme.clone();
+        let requests = requests(Some(surface));
+        fill(&requests);
+        let original = requests.shared.lock().unwrap().theme.theme.clone();
         assert!(matches!(
-            state.handle(Request::Reload),
+            requests.handle(Request::Reload),
             Response::Error { .. }
         ));
-        assert!(Arc::ptr_eq(&original, &state.theme.theme));
+        assert!(Arc::ptr_eq(
+            &original,
+            &requests.shared.lock().unwrap().theme.theme
+        ));
         assert!(matches!(
-            state.handle(Request::SetTheme {
+            requests.handle(Request::SetTheme {
                 name: "default".into(),
                 persist: false
             }),
             Response::Error { .. }
         ));
-        assert!(Arc::ptr_eq(&original, &state.theme.theme));
+        assert!(Arc::ptr_eq(
+            &original,
+            &requests.shared.lock().unwrap().theme.theme
+        ));
     }
 
     #[test]
     fn disconnected_surface_rejects_and_headless_accepts() {
         let (surface, receiver) = wayland::SurfaceHandle::channel();
         drop(receiver);
-        let mut state = shared(Some(surface));
+        let requests = requests(Some(surface));
         let mut payload = SendPayload::new("volume", 50.0);
         payload.source = Some("probe".into());
         assert!(matches!(
-            state.handle(Request::Send(payload.clone())),
+            requests.handle(Request::Send(payload.clone())),
             Response::Error { .. }
         ));
-        assert!(state.history.get("probe", "volume").is_none());
-        state.surface = None;
-        assert!(matches!(state.handle(Request::Send(payload)), Response::Ok));
+        assert!(
+            requests
+                .shared
+                .lock()
+                .unwrap()
+                .history
+                .get("probe", "volume")
+                .is_none()
+        );
+        requests.shared.lock().unwrap().surface = None;
+        assert!(matches!(
+            requests.handle(Request::Send(payload)),
+            Response::Ok
+        ));
         assert_eq!(
-            state.history.get("probe", "volume").unwrap().last_value,
+            requests
+                .shared
+                .lock()
+                .unwrap()
+                .history
+                .get("probe", "volume")
+                .unwrap()
+                .last_value,
             50.0
         );
     }
+
     #[test]
     fn rejected_force_palette_keeps_previous_configuration() {
         let (surface, receiver) = wayland::SurfaceHandle::channel();
-        let mut state = shared(Some(surface));
+        let requests = requests(Some(surface));
         let dir = tempfile::tempdir().unwrap();
         let palette = dir.path().join("palette.kdl");
         std::fs::write(&palette, "palette { accent \"#abcdef\"; }").unwrap();
-        for _ in 0..64 {
-            state
-                .surface
-                .as_ref()
-                .unwrap()
-                .retheme(state.theme.theme.clone(), None)
-                .unwrap();
-        }
-        let original = state.theme.theme.clone();
+        fill(&requests);
+        let original = requests.shared.lock().unwrap().theme.theme.clone();
         let request = || Request::SetForcePalette {
             path: Some(palette.display().to_string()),
         };
-        assert!(matches!(state.handle(request()), Response::Error { .. }));
-        assert!(state.force_palette.is_none());
-        assert!(Arc::ptr_eq(&original, &state.theme.theme));
+        assert!(matches!(requests.handle(request()), Response::Error { .. }));
+        assert!(requests.shared.lock().unwrap().force_palette.is_none());
+        assert!(Arc::ptr_eq(
+            &original,
+            &requests.shared.lock().unwrap().theme.theme
+        ));
         receiver.try_recv().unwrap();
-        assert!(matches!(state.handle(request()), Response::Ok));
-        assert_eq!(state.force_palette, Some(palette));
-        assert!(!Arc::ptr_eq(&original, &state.theme.theme));
+        assert!(matches!(requests.handle(request()), Response::Ok));
+        assert_eq!(requests.shared.lock().unwrap().force_palette, Some(palette));
+        assert!(!Arc::ptr_eq(
+            &original,
+            &requests.shared.lock().unwrap().theme.theme
+        ));
+    }
+}
+
+#[cfg(test)]
+mod theme_concurrency_tests {
+    use super::*;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    fn requests(surface: Option<wayland::SurfaceHandle>) -> Requests {
+        Requests::new(Shared {
+            history: state::History::new(),
+            theme: theme_loader::load_embedded().unwrap(),
+            themes_roots: Vec::new(),
+            surface,
+            watcher: None,
+            config_path: Some(PathBuf::from("unused-test-config")),
+            force_palette: None,
+        })
+    }
+
+    #[test]
+    fn sends_use_previous_theme_while_replacement_is_prepared() {
+        let (surface, receiver) = wayland::SurfaceHandle::channel();
+        let requests = Arc::new(requests(Some(surface)));
+        let original = requests.shared.lock().unwrap().theme.theme.clone();
+        let (started_tx, started_rx) = mpsc::channel();
+        let (resume_tx, resume_rx) = mpsc::channel();
+        let worker = {
+            let requests = Arc::clone(&requests);
+            thread::spawn(move || {
+                requests.change_theme_with(
+                    ThemeChange::Set {
+                        name: "next".into(),
+                        persist: false,
+                    },
+                    move |_, name, _| {
+                        started_tx.send(()).unwrap();
+                        resume_rx.recv().unwrap();
+                        let mut loaded = theme_loader::load_embedded()?;
+                        loaded.name = name.into();
+                        Ok(loaded)
+                    },
+                    |_, _| panic!("unexpected persistence"),
+                )
+            })
+        };
+        started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(
+            requests.shared.try_lock().is_ok(),
+            "theme parsing held shared state"
+        );
+        assert!(matches!(
+            requests.handle(Request::Send(awob_protocol::SendPayload::new(
+                "volume", 50.0
+            ))),
+            Response::Ok
+        ));
+        resume_tx.send(()).unwrap();
+        worker.join().unwrap().unwrap();
+        match receiver.try_recv().unwrap() {
+            wayland::SurfaceCommand::Render { theme, .. } => {
+                assert!(Arc::ptr_eq(&theme, &original))
+            }
+            _ => panic!("send should precede theme publication"),
+        }
+        assert!(matches!(
+            receiver.try_recv().unwrap(),
+            wayland::SurfaceCommand::Retheme { .. }
+        ));
+        assert_eq!(requests.shared.lock().unwrap().theme.name, "next");
+    }
+
+    #[test]
+    fn persistence_keeps_theme_order_without_blocking_sends() {
+        let requests = Arc::new(requests(None));
+        let (started_tx, started_rx) = mpsc::channel();
+        let (resume_tx, resume_rx) = mpsc::channel();
+        let worker = {
+            let requests = Arc::clone(&requests);
+            thread::spawn(move || {
+                requests.change_theme_with(
+                    ThemeChange::Set {
+                        name: "default".into(),
+                        persist: true,
+                    },
+                    theme_loader::load,
+                    move |_, _| {
+                        started_tx.send(()).unwrap();
+                        resume_rx.recv().unwrap();
+                        Ok(())
+                    },
+                )
+            })
+        };
+        started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(
+            requests.shared.try_lock().is_ok(),
+            "persistence held shared state"
+        );
+        assert!(
+            requests.theme_operations.try_lock().is_err(),
+            "theme ordering lock was released before persistence"
+        );
+        assert!(matches!(
+            requests.handle(Request::Send(awob_protocol::SendPayload::new(
+                "volume", 50.0
+            ))),
+            Response::Ok
+        ));
+        assert!(matches!(
+            requests.handle(Request::Query { source: None }),
+            Response::Query { .. }
+        ));
+        resume_tx.send(()).unwrap();
+        worker.join().unwrap().unwrap();
+    }
+    #[test]
+    fn failed_preparation_preserves_theme_and_palette() {
+        let requests = requests(None);
+        let original = requests.shared.lock().unwrap().theme.theme.clone();
+        let result = requests.change_theme_with(
+            ThemeChange::Palette(Some(PathBuf::from("missing-palette"))),
+            |_, _, _| Err(theme_loader::LoadError::NotFound("test failure".into())),
+            |_, _| panic!("failed preparation must not persist"),
+        );
+        assert!(result.is_err());
+        let shared = requests.shared.lock().unwrap();
+        assert!(Arc::ptr_eq(&original, &shared.theme.theme));
+        assert!(shared.force_palette.is_none());
+    }
+
+    #[test]
+    fn persistence_error_reports_that_the_theme_is_already_live() {
+        let requests = requests(None);
+        let original = requests.shared.lock().unwrap().theme.theme.clone();
+        let error = requests
+            .change_theme_with(
+                ThemeChange::Set {
+                    name: "default".into(),
+                    persist: true,
+                },
+                theme_loader::load,
+                |_, _| Err(std::io::Error::other("test write failure")),
+            )
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("theme set in memory but persisting")
+        );
+        assert!(!Arc::ptr_eq(
+            &original,
+            &requests.shared.lock().unwrap().theme.theme
+        ));
+    }
+
+    #[test]
+    fn reload_snapshots_after_prior_theme_persistence() {
+        let requests = Arc::new(requests(None));
+        let (persist_tx, persist_rx) = mpsc::channel();
+        let (resume_tx, resume_rx) = mpsc::channel();
+        let setter = {
+            let requests = Arc::clone(&requests);
+            thread::spawn(move || {
+                requests.change_theme_with(
+                    ThemeChange::Set {
+                        name: "updated".into(),
+                        persist: true,
+                    },
+                    |_, name, _| {
+                        let mut theme = theme_loader::load_embedded()?;
+                        theme.name = name.into();
+                        Ok(theme)
+                    },
+                    move |_, _| {
+                        persist_tx.send(()).unwrap();
+                        resume_rx.recv().unwrap();
+                        Ok(())
+                    },
+                )
+            })
+        };
+        persist_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        let reloader = {
+            let requests = Arc::clone(&requests);
+            thread::spawn(move || {
+                requests.change_theme_with(
+                    ThemeChange::Reload,
+                    |_, name, _| {
+                        assert_eq!(name, "updated");
+                        let mut theme = theme_loader::load_embedded()?;
+                        theme.name = name.into();
+                        Ok(theme)
+                    },
+                    |_, _| panic!("reload should not persist"),
+                )
+            })
+        };
+        assert!(requests.theme_operations.try_lock().is_err());
+        resume_tx.send(()).unwrap();
+        setter.join().unwrap().unwrap();
+        reloader.join().unwrap().unwrap();
+        assert_eq!(requests.shared.lock().unwrap().theme.name, "updated");
     }
 }

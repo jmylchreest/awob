@@ -269,6 +269,18 @@ automatic spawning:
 The daemon will then auto-spawn and supervise it on startup whenever
 it's installed.
 
+## Theme updates
+
+Theme changes and hot reloads prepare the replacement while sends and queries
+continue using the current theme. After preparation succeeds, the daemon queues
+the replacement and publishes it atomically. A load failure or rejected surface
+command leaves the previous theme and palette active.
+
+Theme changes are serialized, including persistence, so an earlier save cannot
+overwrite a later selection. Persistence runs after the new theme becomes active;
+if saving fails, the error states that the theme changed in memory. Theme listing
+uses a snapshot of the active name and does not block sends while scanning files.
+
 ## Theme persistence
 
 `SetTheme { name, persist: true }` rewrites the `theme` key in
