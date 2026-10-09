@@ -322,8 +322,8 @@ jobs:
           - awob-listeners-all
           - awob-git
     steps:
+      # Every publish job needs the pinned AUR host key from this checkout.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        if: matrix.pkgname == 'awob-git'
         with:
           fetch-depth: 0
 
