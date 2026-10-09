@@ -344,7 +344,11 @@ fn rasterise_svg(bytes: &[u8], w: u32, h: u32) -> Result<Pixmap, IconError> {
     Ok(pm)
 }
 
-fn rasterise_png<R: std::io::Read>(reader: R, w: u32, h: u32) -> Result<Pixmap, IconError> {
+fn rasterise_png<R: std::io::BufRead + std::io::Seek>(
+    reader: R,
+    w: u32,
+    h: u32,
+) -> Result<Pixmap, IconError> {
     crate::limits::pixels(w, h).map_err(|_| IconError::TooLarge)?;
     let decoder = png::Decoder::new_with_limits(
         reader,
@@ -357,7 +361,7 @@ fn rasterise_png<R: std::io::Read>(reader: R, w: u32, h: u32) -> Result<Pixmap, 
         .map_err(|e| IconError::Png(e.to_string()))?;
     crate::limits::pixels(reader.info().width, reader.info().height)
         .map_err(|_| IconError::TooLarge)?;
-    let output_bytes = reader.output_buffer_size();
+    let output_bytes = reader.output_buffer_size().ok_or(IconError::TooLarge)?;
     if output_bytes > crate::limits::MAX_RGBA_BYTES {
         return Err(IconError::TooLarge);
     }
@@ -578,6 +582,47 @@ mod tests {
         assert!(resolver.cache.is_empty());
         assert_eq!(resolver.bytes, 0);
     }
+    #[test]
+    fn png_eight_bit_formats_preserve_scaling_and_premultiplied_pixels() {
+        type Case = (png::ColorType, &'static [u8], [[u8; 4]; 2]);
+        let cases: &[Case] = &[
+            (
+                png::ColorType::Rgba,
+                &[255, 128, 0, 128, 32, 64, 255, 255],
+                [[128, 64, 0, 128], [32, 64, 255, 255]],
+            ),
+            (
+                png::ColorType::Rgb,
+                &[255, 128, 0, 32, 64, 255],
+                [[255, 128, 0, 255], [32, 64, 255, 255]],
+            ),
+            (
+                png::ColorType::Grayscale,
+                &[64, 192],
+                [[64, 64, 64, 255], [192, 192, 192, 255]],
+            ),
+            (
+                png::ColorType::GrayscaleAlpha,
+                &[128, 128, 192, 0],
+                [[64, 64, 64, 128], [0, 0, 0, 0]],
+            ),
+        ];
+        for &(colour, samples, pixels) in cases {
+            let mut bytes = Vec::new();
+            {
+                let mut encoder = png::Encoder::new(&mut bytes, 2, 1);
+                encoder.set_color(colour);
+                encoder.set_depth(png::BitDepth::Eight);
+                let mut writer = encoder.write_header().unwrap();
+                writer.write_image_data(samples).unwrap();
+                writer.finish().unwrap();
+            }
+            let pixmap = rasterise_png(std::io::Cursor::new(bytes), 4, 2).unwrap();
+            let row = [pixels[0], pixels[0], pixels[1], pixels[1]].concat();
+            assert_eq!(pixmap.data(), row.repeat(2), "{colour:?}");
+        }
+    }
+
     #[test]
     fn security_png_limits_reject_headers_before_decoding_pixels() {
         // Real PNG headers followed by IDAT, without pixel data. TooLarge
