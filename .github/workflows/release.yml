@@ -92,7 +92,7 @@ jobs:
             build-essential pkg-config \
             libfontconfig1-dev libfreetype6-dev \
             libpipewire-0.3-dev libdbus-1-dev \
-            libudev-dev libxkbcommon-dev makepkg
+            libudev-dev libxkbcommon-dev makepkg pacman-package-manager
       - name: Test AUR publication without credentials
         run: python3 -m unittest discover -s contrib/aur -p 'test_*.py' -v
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable

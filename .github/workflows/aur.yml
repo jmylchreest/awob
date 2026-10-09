@@ -67,7 +67,7 @@ jobs:
               output.write('packages=' + json.dumps(list(PACKAGES) if package == 'all' else [package]) + '\n')
           PY
       - name: Install metadata generator
-        run: sudo apt-get update && sudo apt-get install -y makepkg
+        run: sudo apt-get update && sudo apt-get install -y makepkg pacman-package-manager
       - name: Download the existing stable release
         env:
           GH_TOKEN: ${{ github.token }}
