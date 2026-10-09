@@ -59,7 +59,11 @@ pub enum Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
+/// Use AWOB_SOCKET when set and nonempty, otherwise $XDG_RUNTIME_DIR/awob.sock.
 pub fn default_socket_path() -> Result<PathBuf> {
+    if let Some(path) = std::env::var_os("AWOB_SOCKET").filter(|path| !path.is_empty()) {
+        return Ok(PathBuf::from(path));
+    }
     let dir = std::env::var_os("XDG_RUNTIME_DIR").ok_or(Error::NoRuntimeDir)?;
     Ok(Path::new(&dir).join(awob_protocol::DEFAULT_SOCKET_NAME))
 }
@@ -430,6 +434,86 @@ mod tests {
             }
         });
         path_clone
+    }
+
+    #[test]
+    fn socket_environment_precedence() {
+        // Run each environment in a child process; changing this test runner's
+        // environment would race other tests and requires unsafe in Rust 2024.
+        if let Ok(expected) = std::env::var("AWOB_TEST_SOCKET_EXPECTED") {
+            let explicit = std::env::var_os("AWOB_TEST_SOCKET_EXPLICIT").map(PathBuf::from);
+            let client = Client::connect_or_default(explicit.as_deref());
+            if expected == "missing" {
+                assert!(matches!(client, Err(Error::SocketMissing(_))));
+            } else {
+                assert_eq!(client.unwrap().version().unwrap().0, expected);
+            }
+            return;
+        }
+        let runtime = spawn_mock(|_| Response::Version {
+            daemon_version: "runtime".into(),
+            protocol: PROTOCOL_VERSION,
+        });
+        let environment = spawn_mock(|_| Response::Version {
+            daemon_version: "environment".into(),
+            protocol: PROTOCOL_VERSION,
+        });
+        let explicit = spawn_mock(|_| Response::Version {
+            daemon_version: "explicit".into(),
+            protocol: PROTOCOL_VERSION,
+        });
+        for case in [
+            "environment",
+            "explicit",
+            "empty",
+            "unset",
+            "no-runtime",
+            "missing",
+        ] {
+            let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+            command
+                .args([
+                    "--exact",
+                    "tests::socket_environment_precedence",
+                    "--nocapture",
+                ])
+                .env("XDG_RUNTIME_DIR", runtime.parent().unwrap())
+                .env("AWOB_SOCKET", &environment)
+                .env_remove("AWOB_TEST_SOCKET_EXPLICIT");
+            let expected = match case {
+                "explicit" => {
+                    command.env("AWOB_TEST_SOCKET_EXPLICIT", &explicit);
+                    "explicit"
+                }
+                "empty" => {
+                    command.env("AWOB_SOCKET", "");
+                    "runtime"
+                }
+                "unset" => {
+                    command.env_remove("AWOB_SOCKET");
+                    "runtime"
+                }
+                "no-runtime" => {
+                    command.env_remove("XDG_RUNTIME_DIR");
+                    "environment"
+                }
+                "missing" => {
+                    command.env("AWOB_SOCKET", environment.with_extension("missing"));
+                    "missing"
+                }
+                _ => "environment",
+            };
+            let output = command
+                .env("AWOB_TEST_SOCKET_EXPECTED", expected)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{case}: {} {}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
     }
 
     #[test]

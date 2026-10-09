@@ -13,7 +13,8 @@ directly.
 
 * **Unix stream socket** at `$XDG_RUNTIME_DIR/awob.sock` (override
   via `--socket <path>` on the daemon, `awob.toml`'s `socket` key,
-  or `AWOB_SOCKET` env var on listeners).
+  or `AWOB_SOCKET` env var on listeners and the CLI). An explicit `--socket`
+  takes precedence over `AWOB_SOCKET`; an empty or unset variable uses the default.
 * **JSON-lines.** One `Request` JSON object per line (`\n`-terminated)
   in; one `Response` JSON object per line out. UTF-8.
 * **Synchronous, single-shot per line.** Send a request, read a
