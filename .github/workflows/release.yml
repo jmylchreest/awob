@@ -2,8 +2,7 @@
 #
 # Triggered by:
 #   - tag push matching v*  → stable release (gates: clippy/fmt/test)
-#   - workflow_dispatch     → manual run; useful for re-running a
-#                             failed publish without re-tagging
+#   - workflow_dispatch     → snapshot build; retry AUR via aur.yml on main
 #
 # What it does:
 #   1. prepare:    derive version from tag (or git describe), decide
@@ -93,7 +92,9 @@ jobs:
             build-essential pkg-config \
             libfontconfig1-dev libfreetype6-dev \
             libpipewire-0.3-dev libdbus-1-dev \
-            libudev-dev libxkbcommon-dev
+            libudev-dev libxkbcommon-dev makepkg
+      - name: Test AUR publication without credentials
+        run: python3 -m unittest discover -s contrib/aur -p 'test_*.py' -v
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
           components: clippy, rustfmt
@@ -290,136 +291,12 @@ jobs:
             dist/awob-*.PKGBUILD
 
   aur-publish:
-    # Matrix-publish every AUR package on stable tag pushes. Snapshot
-    # prereleases (workflow_dispatch on main) skip — that history would
-    # be too noisy on AUR.
-    #
-    # awob-git is special-cased: its PKGBUILD doesn't carry @VERSION@
-    # placeholders (pkgver() runs at install-time against `git describe`
-    # on the user's clone), so the file we'd push is byte-identical to
-    # the previous release's unless someone edits the template. Pushing
-    # an "empty" release: vX.Y.Z commit on every tag is just noise on
-    # AUR, so we skip awob-git when contrib/aur/PKGBUILD-git is
-    # unchanged since the previous tag. Every other package is
-    # rendered with the new VERSION + SHA256 so it always differs.
-    name: publish ${{ matrix.pkgname }} to AUR
-    needs: [prepare, package-aur, release]
+    needs: [prepare, release]
+    if: needs.prepare.outputs.is_release == 'true'
     permissions:
       contents: read
-    runs-on: ubuntu-latest
-    if: needs.prepare.outputs.is_release == 'true'
-    strategy:
-      fail-fast: false
-      matrix:
-        pkgname:
-          - awob-bin
-          - awob-listener-pipewire-bin
-          - awob-listener-battery-bin
-          - awob-listener-backlight-bin
-          - awob-listener-keyboard-backlight-bin
-          - awob-listener-power-profile-bin
-          - awob-listener-wob-bin
-          - awob-listeners-all
-          - awob-git
-    steps:
-      # Every publish job needs the pinned AUR host key from this checkout.
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          fetch-depth: 0
-
-      - name: Skip awob-git if PKGBUILD-git unchanged since previous tag
-        id: changed
-        if: matrix.pkgname == 'awob-git'
-        run: |
-          set -euo pipefail
-          prev=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
-          if [[ -z "$prev" ]]; then
-            echo "first tagged release; pushing"
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          if git diff --quiet "$prev" HEAD -- contrib/aur/PKGBUILD-git; then
-            echo "::notice::contrib/aur/PKGBUILD-git unchanged since $prev — skipping awob-git AUR push"
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "contrib/aur/PKGBUILD-git changed since $prev — pushing"
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
-        if: matrix.pkgname != 'awob-git' || steps.changed.outputs.skip != 'true'
-        with:
-          name: awob-${{ needs.prepare.outputs.version }}-aur-staged
-          path: aur-staged
-
-      # Defensive: pre-align the AUR remote's HEAD onto `master`. The
-      # KSXGitHub action clones whatever HEAD points at; if a previous
-      # publish left HEAD pointing at an orphan SHA (bug observed on
-      # awob-listener-{backlight,battery}-bin in v0.1.3 + v0.1.4 runs),
-      # the clone goes detached and `git push origin master` then fails
-      # with "src refspec master does not match any". This step is a
-      # no-op on the happy path (HEAD already points at master) and
-      # silently swallows missing-package errors so brand-new AUR
-      # packages don't trip it.
-      - name: Pre-align AUR HEAD to master (one-time fix-up)
-        if: matrix.pkgname != 'awob-git' || steps.changed.outputs.skip != 'true'
-        env:
-          AUR_KEY: ${{ secrets.AUR_KEY }}
-          PKG: ${{ matrix.pkgname }}
-        run: |
-          set -euo pipefail
-          mkdir -p ~/.ssh && chmod 700 ~/.ssh
-          printf '%s\n' "$AUR_KEY" > ~/.ssh/aur && chmod 600 ~/.ssh/aur
-          cp .github/aur_known_hosts ~/.ssh/known_hosts
-          cat > ~/.ssh/config <<'CONF'
-          Host aur.archlinux.org
-            User aur
-            IdentityFile ~/.ssh/aur
-            IdentitiesOnly yes
-            StrictHostKeyChecking yes
-            HostKeyAlgorithms ssh-ed25519
-            UserKnownHostsFile ~/.ssh/known_hosts
-            GlobalKnownHostsFile /dev/null
-            UpdateHostKeys no
-          CONF
-          chmod 600 ~/.ssh/config
-
-          tmp=$(mktemp -d)
-          if ! git clone "ssh://aur@aur.archlinux.org/${PKG}.git" "$tmp/repo" 2>/dev/null; then
-            echo "::notice::AUR remote ${PKG} not yet present (new package); skipping pre-align"
-            rm -rf "$tmp"
-            exit 0
-          fi
-          cd "$tmp/repo"
-          if [[ -z "$(git symbolic-ref --quiet HEAD || true)" ]]; then
-            # HEAD is detached on the remote. Force a local master at
-            # the same SHA HEAD pointed at, then push it. This realigns
-            # the remote's symbolic HEAD onto refs/heads/master so the
-            # next clone (the publish step below) lands on master and
-            # the action's `push origin master` succeeds.
-            echo "::warning::${PKG} AUR remote was in detached-HEAD state; realigning master"
-            git -c user.name="jmylchreest" -c user.email="jmylchreest@gmail.com" \
-                checkout -B master
-            git -c user.name="jmylchreest" -c user.email="jmylchreest@gmail.com" \
-                -c commit.gpgsign=false push origin master --force-with-lease
-          fi
-          cd /
-          rm -rf "$tmp"
-
-      - name: Publish ${{ matrix.pkgname }} to AUR
-        if: matrix.pkgname != 'awob-git' || steps.changed.outputs.skip != 'true'
-        uses: KSXGitHub/github-actions-deploy-aur@084b0d9b15415bf9cdb65d44dad1efe37a354050 # v4.2.0
-        # The Docker action scans keys into its own ~/.ssh/known_hosts. Git
-        # must ignore that file and use our independently verified pin.
-        env:
-          GIT_SSH_COMMAND: >-
-            ssh -o StrictHostKeyChecking=yes -o HostKeyAlgorithms=ssh-ed25519
-            -o UserKnownHostsFile=/github/workspace/.github/aur_known_hosts
-            -o GlobalKnownHostsFile=/dev/null -o UpdateHostKeys=no
-        with:
-          pkgname: ${{ matrix.pkgname }}
-          pkgbuild: ./aur-staged/${{ matrix.pkgname }}/PKGBUILD
-          commit_username: jmylchreest
-          commit_email: jmylchreest@gmail.com
-          ssh_private_key: ${{ secrets.AUR_KEY }}
-          commit_message: "release: v${{ needs.prepare.outputs.version }}"
+    uses: ./.github/workflows/aur.yml
+    with:
+      tag: ${{ format('v{0}', needs.prepare.outputs.version) }}
+    secrets:
+      AUR_KEY: ${{ secrets.AUR_KEY }}

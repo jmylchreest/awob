@@ -1,0 +1,138 @@
+name: Publish AUR
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        type: string
+        required: true
+      package:
+        type: string
+        default: all
+      dry_run:
+        type: boolean
+        default: false
+    secrets:
+      AUR_KEY:
+        required: false
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing stable release tag (for example v0.1.9)
+        type: string
+        required: true
+      package:
+        description: AUR package name, or all
+        type: string
+        default: all
+      dry_run:
+        description: Validate release assets without publishing
+        type: boolean
+        default: true
+
+permissions: {}
+
+jobs:
+  prepare:
+    # Dispatch from main to use repaired publisher code with an older release.
+    if: github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.inputs.outputs.version }}
+      packages: ${{ steps.inputs.outputs.packages }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Validate inputs and host key
+        id: inputs
+        env:
+          TAG: ${{ inputs.tag }}
+          PACKAGE: ${{ inputs.package }}
+        run: |
+          python3 - <<'PY'
+          import json, os, sys
+          sys.path.insert(0, 'contrib/aur')
+          from publish import PACKAGES, ROOT, check_pin, version_from_tag
+          version = version_from_tag(os.environ['TAG'])
+          package = os.environ['PACKAGE']
+          if package != 'all' and package not in PACKAGES:
+              raise SystemExit('Unknown AUR package')
+          check_pin(ROOT / '.github/aur_known_hosts')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write(f'version={version}\n')
+              output.write('packages=' + json.dumps(list(PACKAGES) if package == 'all' else [package]) + '\n')
+          PY
+      - name: Install metadata generator
+        run: sudo apt-get update && sudo apt-get install -y makepkg
+      - name: Download the existing stable release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+          VERSION: ${{ steps.inputs.outputs.version }}
+          PACKAGE: ${{ inputs.package }}
+        run: |
+          set -euo pipefail
+          git merge-base --is-ancestor "refs/tags/$TAG" origin/main
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" \
+            --json isDraft,isPrerelease,tagName > release.json
+          python3 - <<'PY'
+          import json, os
+          release = json.load(open('release.json'))
+          assert not release['isDraft'] and not release['isPrerelease'], 'Stable published release required'
+          assert release['tagName'] == os.environ['TAG'], 'Release tag mismatch'
+          PY
+          # An old binary package cannot downgrade its remote version. awob-git
+          # has an install-time version, so only publish it from the latest release.
+          if [[ "$PACKAGE" == all || "$PACKAGE" == awob-git ]]; then
+            latest=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName)
+            [[ "$TAG" == "$latest" ]] || { echo "Use the latest release when publishing awob-git" >&2; exit 1; }
+          fi
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir dist \
+            --pattern "awob-${VERSION}-x86_64-unknown-linux-gnu.tar.gz*" \
+            --pattern "awob-${VERSION}.*.PKGBUILD"
+      - name: Validate recipes against the tag and generate metadata
+        env:
+          TAG: ${{ inputs.tag }}
+        run: python3 contrib/aur/publish.py prepare --tag "$TAG"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: aur-ready-${{ steps.inputs.outputs.version }}
+          path: aur-ready/
+          include-hidden-files: true
+          overwrite: true
+      - name: Summarize validation
+        env:
+          TAG: ${{ inputs.tag }}
+        run: echo "Validated all nine AUR recipes and metadata for $TAG. No binaries were rebuilt." >> "$GITHUB_STEP_SUMMARY"
+
+  publish:
+    needs: prepare
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        package: ${{ fromJSON(needs.prepare.outputs.packages) }}
+    concurrency:
+      group: aur-${{ matrix.package }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: aur-ready-${{ needs.prepare.outputs.version }}
+          path: aur-ready
+      - name: Publish and verify remote commit
+        env:
+          AUR_KEY: ${{ secrets.AUR_KEY }}
+          TAG: ${{ inputs.tag }}
+          PACKAGE: ${{ matrix.package }}
+        run: python3 contrib/aur/publish.py publish --tag "$TAG" --package "$PACKAGE"

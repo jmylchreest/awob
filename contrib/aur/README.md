@@ -1,6 +1,6 @@
 # AUR packaging
 
-awob ships eight AUR packages: a slim "core" binary package, one
+awob ships nine AUR packages: a slim "core" binary package, one
 binary package per official listener, a meta-package that pulls every
 listener at once, and a from-source VCS build.
 
@@ -53,7 +53,7 @@ and `@SHA256@` placeholders that the release workflow fills in
 automatically when a `v*` tag is pushed. The rendered files ride
 along on the GitHub release as
 `awob-<version>.<pkgname>.PKGBUILD` and are pushed to AUR by the
-matrixed `aur-publish` workflow job, gated on the repository secret
+reusable `Publish AUR` workflow, gated on the repository secret
 `AUR_KEY` (an SSH private key whose public half is registered with
 aur.archlinux.org under the maintainer's account).
 
@@ -72,3 +72,44 @@ SHA256=$(curl -sL "https://github.com/jmylchreest/awob/releases/download/v${VERS
 sed -e "s/@VERSION@/${VERSION}/" -e "s/@SHA256@/${SHA256}/" \
     PKGBUILD-bin > /tmp/awob-bin/PKGBUILD
 ```
+
+## Retrying publication
+
+Use the **Publish AUR** workflow (`aur.yml`) on `main`, specifying the
+existing stable tag. Leave `dry_run` enabled to validate without writing,
+or disable it to publish. Set `package` to one AUR package name to retry
+only that package; the default is `all`. Publishing `all` or `awob-git`
+requires the latest release so an older retry cannot roll back its VCS recipe.
+
+```sh
+gh workflow run aur.yml --ref main -f tag=v0.1.9 -F dry_run=true
+# After validation, publish the same existing release:
+gh workflow run aur.yml --ref main -f tag=v0.1.9 -F dry_run=false
+```
+
+This downloads the existing release, checks its archive checksum, compares
+all nine recipes with the tagged source, and generates `.SRCINFO` with
+`makepkg` before exposing the publishing credential. It does not rebuild
+binaries, replace assets, or move the tag. Using `main` means a publisher
+fix can recover an older release; rerunning the original failed release
+run would still use its old workflow code.
+
+Publication fetches and pushes through the same SSH remote with the pinned
+host key. It explicitly selects `master`, preserves existing history, skips
+unchanged packages, and verifies the remote commit after each push. It
+rejects downgrades and changed recipes for an already-published binary
+version. Concurrent updates fail safely; retry after inspecting the remote.
+VCS package versions remain install-time values, so unchanged `awob-git`
+recipes produce no release commit.
+
+Each package has a separate workflow result and summary. Git verification
+is authoritative for the push; the public AUR API can be checked separately
+for visibility and must not be confused with the Git result.
+
+Run the publisher regression suite locally with Python, Git and makepkg:
+
+```sh
+python3 -m unittest discover -s contrib/aur -p 'test_*.py' -v
+```
+
+It uses temporary local repositories, never AUR credentials or remote pushes.
