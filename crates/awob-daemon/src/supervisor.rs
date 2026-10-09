@@ -178,8 +178,7 @@ fn spawn_child(state: &mut ChildState, socket_path: Option<&PathBuf>) {
         .collect();
     cmd.args(&expanded);
 
-    // Pass our socket path as AWOB_SOCKET so listeners pick it up if they
-    // honour the env var (most don't yet, but it's a stable convention).
+    // The shared client SDK uses AWOB_SOCKET unless a listener has --socket.
     if let Some(p) = socket_path {
         cmd.env("AWOB_SOCKET", p);
     }

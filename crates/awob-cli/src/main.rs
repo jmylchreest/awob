@@ -7,7 +7,7 @@ use clap::{Parser, Subcommand};
 #[derive(Parser, Debug)]
 #[command(version, about = "awob — wayland overlay bar client")]
 struct Cli {
-    /// Path to the daemon socket. Defaults to $XDG_RUNTIME_DIR/awob.sock.
+    /// Path to the daemon socket. Defaults to $AWOB_SOCKET, then $XDG_RUNTIME_DIR/awob.sock.
     #[arg(long, global = true)]
     socket: Option<PathBuf>,
 
