@@ -125,7 +125,10 @@ fn image(
                 .map_err(|_| IconError::TooLarge)?;
             // resvg expands to RGBA8; the direct PNG decoder may use more bytes
             // for 16-bit input. Account for whichever representation is larger.
-            let decoded = reader.output_buffer_size().max(pixels * 4);
+            let decoded = reader
+                .output_buffer_size()
+                .ok_or(IconError::TooLarge)?
+                .max(pixels * 4);
             charge(&budget.decoded, decoded, limits::MAX_RGBA_BYTES)?;
             // Validate compressed rows without allocating a full output image.
             // resvg otherwise silently drops corrupt nested PNGs after parse.
