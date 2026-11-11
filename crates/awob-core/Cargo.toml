@@ -14,7 +14,7 @@ kdl = "6"
 thiserror = "2"
 tiny-skia = "0.12"
 cosmic-text = "0.19"
-resvg = "0.48"
+resvg = "0.49"
 usvg = "0.48"
 png = "0.18"
 rustix = { workspace = true, features = ["fs"] }
